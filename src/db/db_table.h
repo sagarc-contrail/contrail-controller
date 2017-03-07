@@ -12,6 +12,7 @@
 #include <tbb/atomic.h>
 
 #include "base/util.h"
+#include "winutils.h"
 
 class DB;
 class DBClient;
@@ -223,7 +224,7 @@ public:
     // Find DB Entry. Get key from from argument
     DBEntry *Find(const DBEntry *entry);
 
-    DBEntry *Find(const DBRequestKey *key, int id = -1);
+    DBEntry *Find(const DBRequestKey *key);
 
     // Find DB Entry without taking lock. Calling routine must ensure its
     // running in exclusion with DB task

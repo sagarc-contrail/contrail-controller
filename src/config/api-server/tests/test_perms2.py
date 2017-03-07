@@ -10,6 +10,9 @@ import uuid
 import logging
 import coverage
 
+import cgitb
+cgitb.enable(format='text')
+
 import fixtures
 import testtools
 from testtools.matchers import Equals, MismatchError, Not, Contains
@@ -31,8 +34,6 @@ from keystonemiddleware import auth_token
 from cfgm_common import rest, utils
 from cfgm_common.rbaclib import *
 import cfgm_common
-from cfgm_common import vnc_cgitb
-vnc_cgitb.enable(format='text')
 
 sys.path.append('../common/tests')
 import test_utils
@@ -257,7 +258,6 @@ class TestPermissions(test_case.ApiServerTestCase):
         extra_config_knobs = [
             ('DEFAULTS', 'aaa_mode', 'rbac'),
             ('DEFAULTS', 'cloud_admin_role', 'cloud-admin'),
-            ('DEFAULTS', 'global_read_only_role', 'read-only-role'),
             ('DEFAULTS', 'auth', 'keystone'),
         ]
         super(TestPermissions, cls).setUpClass(extra_mocks=extra_mocks,
@@ -279,16 +279,15 @@ class TestPermissions(test_case.ApiServerTestCase):
         self.admin = User(ip, port, kc, 'admin', 'contrail123', 'cloud-admin', 'admin-%s' % self.id())
         self.admin1 = User(ip, port, kc, 'admin1', 'contrail123', 'admin', 'admin1-%s' % self.id())
         self.admin2 = User(ip, port, kc, 'admin2', 'contrail123', 'admin', 'admin2-%s' % self.id())
-        self.adminr = User(ip, port, kc, 'adminr', 'contrail123', 'read-only-role', 'adminr-%s' % self.id())
 
-        self.users = [self.alice, self.bob, self.admin, self.admin1, self.admin2, self.adminr]
+        self.users = [self.alice, self.bob, self.admin1, self.admin2]
 
         """
         1. create project in API server
         2. read objects back and pupolate locally
         3. reassign ownership of projects to user from admin
         """
-        for user in self.users:
+        for user in [self.admin, self.alice, self.bob, self.admin1, self.admin2]:
             project_obj = Project(user.project)
             project_obj.uuid = user.project_uuid
             logger.info( 'Creating Project object for %s, uuid %s' \
@@ -640,19 +639,10 @@ class TestPermissions(test_case.ApiServerTestCase):
         y = bob.vnc_lib.virtual_networks_list(parent_id = bob.project_uuid)
         for item in y['virtual-networks']:
             logger.info( '    %s: %s' % (item['uuid'], item['fq_name']))
-        # list should be empty because parent_id filter precludes sharing
-        expected = set([])
-        received = set([item['fq_name'][-1] for item in y['virtual-networks']])
-        self.assertEquals(expected, received)
-
-        logger.info('')
-        logger.info( 'Bob: network list')
-        y = bob.vnc_lib.virtual_networks_list()
-        for item in y['virtual-networks']:
-            logger.info( '    %s: %s' % (item['uuid'], item['fq_name']))
-        # list should be non-empty because missing filter will enable sharing
+        # need changes in auto code generation for lists
         expected = set([self.vn_name])
         received = set([item['fq_name'][-1] for item in y['virtual-networks']])
+
         self.assertEquals(expected, received)
 
     def test_shared_access(self):
@@ -743,49 +733,23 @@ class TestPermissions(test_case.ApiServerTestCase):
         except PermissionDenied as e:
             self.assertTrue(False, 'Failed to read VN ... Test failed!')
 
-    def test_domain_sharing(self):
-        # validate domain sharing is enabled for domain by default
-        domain_name = 'domain-%s' % self.id()
-        domain = Domain(domain_name)
-        self.admin.vnc_lib.domain_create(domain)
-        dom = vnc_read_obj(self.admin.vnc_lib, 'domain', name = [domain_name])
-        share_set = set(["%s:%d" % (item.tenant, item.tenant_access) for item in dom.get_perms2().share])
-        self.assertTrue('domain:%s:%d' % (dom.uuid, cfgm_common.DOMAIN_SHARING_PERMS) in share_set,
-            "Domain scope not set in domain share list")
-
-        # validate domain sharing is enabled for "default-domain" by default
-        dom = vnc_read_obj(self.admin.vnc_lib, 'domain', name = ['default-domain'])
-        share_set = set(["%s:%d" % (item.tenant, item.tenant_access) for item in dom.get_perms2().share])
-        self.assertTrue('domain:%s:%d' % (dom.uuid, cfgm_common.DOMAIN_SHARING_PERMS) in share_set,
-            "Domain scope not set in domain share list")
-
-        # validate non-admin can create virtual-dns
+        # validate virtual-dns enabled domain sharing by default
         vdns = VirtualDns(name = "my-vDNS")
         d = VirtualDnsType(domain_name = "test-domain", record_order = "fixed", default_ttl_seconds = 3600)
         vdns.set_virtual_DNS_data(d)
-        try:
-            self.alice.vnc_lib.virtual_DNS_create(vdns)
-        except PermissionDenied as e:
-            self.assertTrue(False, 'Failed to create vDNS ... Test failed!')
-        vdns = vnc_read_obj(self.alice.vnc_lib, 'virtual-DNS', name = vdns.get_fq_name())
+        admin.vnc_lib.virtual_DNS_create(vdns)
+        vdns = vnc_read_obj(admin.vnc_lib, 'virtual-DNS', name = vdns.get_fq_name())
+        dom = vnc_read_obj(admin.vnc_lib, 'domain', name = ['default-domain'])
+        share_set = set(["%s:%d" % (item.tenant, item.tenant_access) for item in vdns.get_perms2().share])
+        self.assertTrue('domain:%s:%d' % (dom.uuid, PERMS_R) in share_set, "Domain scope not set in VDNS share list")
 
-        # validate non-admin can create service template
+        # validate service template enabled domain sharing by default
         st = ServiceTemplate(name = "my-st")
-        try:
-            self.alice.vnc_lib.service_template_create(st)
-        except PermissionDenied as e:
-            self.assertTrue(False, 'Failed to create service-template ... Test failed!')
-        st = vnc_read_obj(self.alice.vnc_lib, 'service-template', name = st.get_fq_name())
-
-        # validate anonther-user can't delete other's object due to domain sharing
-        with ExpectedException(PermissionDenied) as e:
-            self.bob.vnc_lib.service_template_delete(fq_name = st.get_fq_name())
-
-        # validate owner can delete service template
-        try:
-            self.alice.vnc_lib.service_template_delete(fq_name = st.get_fq_name())
-        except PermissionDenied as e:
-            self.assertTrue(False, 'Failed to delete service-template ... Test failed!')
+        admin.vnc_lib.service_template_create(st)
+        st = vnc_read_obj(admin.vnc_lib, 'service-template', name = st.get_fq_name())
+        dom = vnc_read_obj(admin.vnc_lib, 'domain', name = ['default-domain'])
+        share_set = set(["%s:%d" % (item.tenant, item.tenant_access) for item in vdns.get_perms2().share])
+        self.assertTrue('domain:%s:%d' % (dom.uuid, PERMS_R) in share_set, "Domain scope not set in VDNS share list")
 
     def test_check_obj_perms_api(self):
         logger.info('')
@@ -866,35 +830,6 @@ class TestPermissions(test_case.ApiServerTestCase):
         for user in [alice, bob, admin]:
             perms = user.check_perms(vn.get_uuid())
             self.assertEquals(perms, ExpectedPerms[user.name])
-
-        ExpectedCloudAdminRole = {'alice': False, 'bob': False, 'admin': True, 'adminr': False}
-        ExpectedGlobalReadOnlyRole = {'alice': False, 'bob': False, 'admin': False, 'adminr': True}
-        for user in [self.alice, self.bob, self.admin, self.adminr]:
-            self.assertEquals(user.vnc_lib.is_cloud_admin_role(), ExpectedCloudAdminRole[user.name])
-            self.assertEquals(user.vnc_lib.is_global_read_only_role(), ExpectedGlobalReadOnlyRole[user.name])
-
-    def test_check_obj_perms_api_no_auth(self):
-        logger.info('')
-        logger.info( '########### CHECK OBJ PERMS API ##################')
-
-        alice = self.alice
-        bob   = self.bob
-        admin = self.admin
-        self.vn_name = "alice-vn-%s" % self.id()
-
-        rv = admin.vnc_lib.set_aaa_mode("no-auth")
-        self.assertEquals(rv['aaa-mode'], "no-auth")
-
-        vn = VirtualNetwork(self.vn_name, self.admin.project_obj)
-        self.admin.vnc_lib.virtual_network_create(vn)
-
-        ExpectedPerms = {'admin':'RWX', 'alice':'RWX', 'bob':'RWX'}
-        for user in [alice, bob, admin]:
-            perms = user.check_perms(vn.get_uuid())
-            self.assertEquals(perms, ExpectedPerms[user.name])
-
-        rv = admin.vnc_lib.set_aaa_mode("rbac")
-        self.assertEquals(rv['aaa-mode'], "rbac")
 
     # check owner of internally created ri is cloud-admin (bug #1528796)
     def test_ri_owner(self):
@@ -1003,17 +938,8 @@ class TestPermissions(test_case.ApiServerTestCase):
         logger.info( 'alice: create VN in her project')
         vn_fq_name = [self.domain_name, alice.project, self.vn_name]
         vn = VirtualNetwork(self.vn_name, self.alice.project_obj)
-        vn.set_is_shared(False)
         self.alice.vnc_lib.virtual_network_create(vn)
         vn = vnc_read_obj(alice.vnc_lib, 'virtual-network', name = vn_fq_name)
-
-        # validate chmod of global perms reflected in is_shared flag
-        alice.vnc_lib.chmod(vn.get_uuid(), global_access=PERMS_R)
-        vn = vnc_read_obj(self.alice.vnc_lib, 'virtual-network', name = vn_fq_name)
-        self.assertEquals(vn.get_is_shared(), True)
-        alice.vnc_lib.chmod(vn.get_uuid(), global_access=0)
-        vn = vnc_read_obj(self.alice.vnc_lib, 'virtual-network', name = vn_fq_name)
-        self.assertEquals(vn.get_is_shared(), False)
 
         logger.info( "Verify Bob cannot chmod Alice's virtual network")
         self.assertRaises(PermissionDenied, bob.vnc_lib.chmod, vn.get_uuid(), owner=bob.project_uuid)
@@ -1213,115 +1139,6 @@ class TestPermissions(test_case.ApiServerTestCase):
 
         status_code, result = alice.vnc_lib._http_get('/virtual-networks')
         self.assertThat(status_code, Equals(401))
-
-    def test_default_ipam_perms(self):
-        " test default-domain:default-project:default-network-ipam allows global read/linking by default"
-
-        ipam_fq_name = ['default-domain', 'default-project', 'default-network-ipam']
-        ipam = vnc_read_obj(self.alice.vnc_lib, 'network-ipam', name = ipam_fq_name)
-        self.assertEquals(ipam.get_perms2().global_access, PERMS_RX)
-
-    def test_global_read_only_role(self):
-        vn = VirtualNetwork('alice-%s' % self.id(), self.alice.project_obj)
-        vn_fq_name = vn.get_fq_name()
-
-        # read-only role - create VN  ... should fail
-        with ExpectedException(PermissionDenied) as e:
-            self.adminr.vnc_lib.virtual_network_create(vn)
-
-        # create VN owned by Alice
-        self.alice.vnc_lib.virtual_network_create(vn)
-
-        # read-only role - delete VN  ... should fail
-        with ExpectedException(PermissionDenied) as e:
-            self.adminr.vnc_lib.virtual_network_delete(fq_name = vn_fq_name)
-
-        # read-only role - read VN  ... should succeed
-        try:
-            vn = vnc_read_obj(self.adminr.vnc_lib, 'virtual-network', name = vn_fq_name)
-            self.assertTrue(True, 'Read VN successfully ... test passed')
-        except PermissionDenied as e:
-            self.assertTrue(False, 'Read VN failed ... test failed!!!')
-
-        # cloud admin - delete VN  ... should succeed
-        try:
-            self.admin.vnc_lib.virtual_network_delete(fq_name = vn_fq_name)
-            self.assertTrue(True, 'Deleted VN successfully ... test passed')
-        except PermissionDenied as e:
-            self.assertTrue(False, 'Delete VN failed ... test failed!!!')
-    # end
-
-    def test_obj_view(self):
-        alice = self.alice
-        admin = self.admin
-        proj_obj = alice.project_obj
-
-        ipam1_obj = NetworkIpam('ipam-1-%s' %(self.id()), parent_obj=proj_obj)
-        alice.vnc_lib.network_ipam_create(ipam1_obj)
-        vn_obj = VirtualNetwork('vn-1-%s' %(self.id()), parent_obj=proj_obj)
-        vn_obj.add_network_ipam(ipam1_obj,
-            VnSubnetsType(
-                [IpamSubnetType(SubnetType('1.1.1.0', 28))]))
-        alice.vnc_lib.virtual_network_create(vn_obj)
-
-        # set to different user
-        ipam2_obj = NetworkIpam('ipam-2-%s' %(self.id()), parent_obj=proj_obj)
-        admin.vnc_lib.network_ipam_create(ipam2_obj)
-
-        """
-        vn_obj.add_network_ipam(ipam2_obj,
-            VnSubnetsType(
-                [IpamSubnetType(SubnetType('2.2.2.0', 28))]))
-        alice.vnc_lib.virtual_network_update(vn_obj)
-
-        # assert refs
-        read_vn_obj = alice.vnc_lib.virtual_network_read(id=vn_obj.uuid)
-        assert ipam2_obj.uuid not in read_vn_obj.network_ipam_refs
-        assert ipam_obj.uuid in read_proj_obj.network_ipam_refs
-        """
-
-        vmi_obj = VirtualMachineInterface('vmi-1', parent_obj=proj_obj)
-        vmi_obj.add_virtual_network(vn_obj)
-        alice.vnc_lib.virtual_machine_interface_create(vmi_obj)
-
-        # instance-ip test
-        iip1_obj = InstanceIp('iip-1-%s' %(self.id()))
-        iip1_obj.add_virtual_network(vn_obj)
-        iip1_obj.add_virtual_machine_interface(vmi_obj)
-        alice.vnc_lib.instance_ip_create(iip1_obj)
-
-        # set to different user
-        iip2_obj = InstanceIp('iip-2-%s' %(self.id()))
-        iip2_obj.add_virtual_network(vn_obj)
-        iip2_obj.add_virtual_machine_interface(vmi_obj)
-        admin.vnc_lib.instance_ip_create(iip2_obj)
-
-        # assert backrefs
-        read_vmi_obj = alice.vnc_lib.virtual_machine_interface_read(id=vmi_obj.uuid,
-                        fields=['instance_ip_back_refs'])
-        iip_back_refs = [iip['to'] for iip in read_vmi_obj.get_instance_ip_back_refs()]
-        self.assertTrue(iip1_obj.get_fq_name() in iip_back_refs)
-        self.assertTrue(iip2_obj.get_fq_name() not in iip_back_refs)
-
-        # assert child
-        read_proj_obj = alice.vnc_lib.project_read(id=proj_obj.uuid, fields=['network_ipams'])
-        net_ipams_seen = [ipam['uuid'] for ipam in read_proj_obj.network_ipams]
-        self.assertTrue(ipam1_obj.uuid in net_ipams_seen)
-        self.assertTrue(ipam2_obj.uuid not in net_ipams_seen)
-
-        # ensure admin isn't impacted
-        # backref
-        read_vmi_obj = admin.vnc_lib.virtual_machine_interface_read(id=vmi_obj.uuid,
-                        fields=['instance_ip_back_refs'])
-        iip_back_refs = [iip['to'] for iip in read_vmi_obj.get_instance_ip_back_refs()]
-        self.assertTrue(iip1_obj.get_fq_name() in iip_back_refs)
-        self.assertTrue(iip2_obj.get_fq_name() in iip_back_refs)
-
-        # child
-        read_proj_obj = admin.vnc_lib.project_read(id=proj_obj.uuid, fields=['network_ipams'])
-        net_ipams_seen = [ipam['uuid'] for ipam in read_proj_obj.network_ipams]
-        self.assertTrue(ipam1_obj.uuid in net_ipams_seen)
-        self.assertTrue(ipam2_obj.uuid in net_ipams_seen)
 
     def tearDown(self):
         super(TestPermissions, self).tearDown()

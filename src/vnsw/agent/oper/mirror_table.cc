@@ -59,7 +59,7 @@ DBEntry *MirrorTable::Add(const DBRequest *req) {
 
 bool MirrorTable::OnChange(MirrorEntry *mirror_entry) {
     bool ret = false;
-    NextHop *nh = NULL;
+    NextHop *nh;
     bool valid_nh = false;
     if (mirror_entry->mirror_flags_ ==
         MirrorEntryData::DynamicNH_Without_JuniperHdr) {
@@ -503,8 +503,8 @@ void MirrorTable::ReadHandler(const boost::system::error_code &ec,
 
     udp_sock_->async_receive(boost::asio::buffer(rx_buff_, sizeof(rx_buff_)), 
                            boost::bind(&MirrorTable::ReadHandler, this, 
-                                       placeholders::error,
-                                       placeholders::bytes_transferred));
+                                       boost::asio::placeholders::error,
+                                       boost::asio::placeholders::bytes_transferred));
 }
 
 void MirrorTable::MirrorSockInit(void) {
@@ -534,8 +534,8 @@ void MirrorTable::MirrorSockInit(void) {
 
     udp_sock_->async_receive(boost::asio::buffer(rx_buff_, sizeof(rx_buff_)), 
                              boost::bind(&MirrorTable::ReadHandler, this, 
-                                         placeholders::error,
-                                         placeholders::bytes_transferred));
+								 boost::asio::placeholders::error,
+								 boost::asio::placeholders::bytes_transferred));
 }
 
 VrfEntry *MirrorTable::FindVrfEntry(const string &vrf_name) const {

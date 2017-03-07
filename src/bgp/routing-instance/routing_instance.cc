@@ -13,7 +13,6 @@
 #include "bgp/bgp_factory.h"
 #include "bgp/bgp_log.h"
 #include "bgp/bgp_server.h"
-#include "bgp/bgp_table_types.h"
 #include "bgp/routing-instance/iroute_aggregator.h"
 #include "bgp/routing-instance/iservice_chain_mgr.h"
 #include "bgp/routing-instance/istatic_route_mgr.h"
@@ -328,10 +327,6 @@ RoutingInstance *RoutingInstanceMgr::CreateRoutingInstance(
         import_rt, export_rt,
         rtinstance->virtual_network(), rtinstance->virtual_network_index());
 
-    // Create any neighbors that belong to the routing-instance.
-    if (!rtinstance->IsMasterRoutingInstance())
-        rtinstance->CreateNeighbors();
-
     return rtinstance;
 }
 
@@ -431,12 +426,6 @@ void RoutingInstanceMgr::DestroyRoutingInstance(RoutingInstance *rtinstance) {
     RTINSTANCE_LOG(Destroy, rtinstance,
         SandeshLevel::SYS_DEBUG, RTINSTANCE_LOG_FLAG_ALL);
 
-    // Delete instance stats uve.
-    RoutingInstanceStatsData instance_info;
-    instance_info.set_name(rtinstance->name());
-    instance_info.set_deleted(true);
-    RoutingInstanceStats::Send(instance_info);
-
     // Remove call here also deletes the instance.
     const string name = rtinstance->name();
     instances_.Remove(rtinstance->name(), rtinstance->index());
@@ -506,17 +495,6 @@ RoutingInstance::RoutingInstance(string name, BgpServer *server,
 }
 
 RoutingInstance::~RoutingInstance() {
-}
-
-void RoutingInstance::CreateNeighbors() {
-    CHECK_CONCURRENCY("bgp::Config");
-
-    if (config_->neighbor_list().empty())
-        return;
-    PeerManager *peer_manager = LocatePeerManager();
-    BOOST_FOREACH(const string &name, config_->neighbor_list()) {
-        peer_manager->PeerResurrect(name);
-    }
 }
 
 void RoutingInstance::ProcessRoutingPolicyConfig() {

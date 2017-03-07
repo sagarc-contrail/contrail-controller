@@ -1,7 +1,8 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
-
+#include <boost/asio.hpp>
+#include <windows.h>
 #include <sstream>
 #include <fstream>
 #include <sandesh/common/vns_types.h>
@@ -338,7 +339,7 @@ bool VrouterUveEntryBase::AppendInterface(DBTablePartBase *part,
         const VmInterface *port = static_cast<const VmInterface *>(intf);
         if (!entry->IsDeleted()) {
             if (port->cfg_name() == agent_->NullString()) {
-                nova_if_list.get()->push_back(UuidToString(port->GetUuid()));
+                nova_if_list.get()->push_back(UUIDToString(port->GetUuid()));
             } else {
                 if (agent_->tsn_enabled()) {
                     /* For TSN nodes send VMI in interface_list if the VMI's
@@ -765,7 +766,7 @@ void VrouterUveEntryBase::SendVrouterProuterAssociation
     (const vector<string> &list) {
     VrouterAgent vrouter_agent;
     vrouter_agent.set_name(agent_->agent_name());
-    if (agent_->tor_agent_enabled()) {
+    if (agent_->simulate_evpn_tor()) {
         vrouter_agent.set_tor_prouter_list(list);
     } else if (agent_->tsn_enabled()) {
         vrouter_agent.set_tsn_prouter_list(list);

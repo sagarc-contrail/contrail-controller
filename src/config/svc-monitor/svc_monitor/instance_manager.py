@@ -242,9 +242,6 @@ class InstanceManager(object):
         VirtualMachineSM.locate(vm_obj.uuid)
         self.logger.info("Info: VM %s updated SI %s" %
                              (vm_obj.get_fq_name_str(), si_obj.get_fq_name_str()))
-
-        # vm should be owned by tenant
-        self._vnc_lib.chown(vm_uuid, si.parent_key)
         return vm_obj
 
     def create_port_tuple(self, si, st, instance_index, pt_uuid):
@@ -600,9 +597,6 @@ class InstanceManager(object):
         elif vmi_updated:
             self._vnc_lib.virtual_machine_interface_update(vmi_obj)
 
-        # VMI should be owned by tenant
-        self._vnc_lib.chown(vmi_obj.uuid, si.parent_key)
-
         VirtualMachineInterfaceSM.locate(vmi_obj.uuid)
 
         # instance ip
@@ -624,12 +618,6 @@ class InstanceManager(object):
                 "Instance IP not allocated for %s %s"
                 % (instance_name, proj_obj.name))
             return
-
-        # instance-ip should be owned by tenant
-        if iip_obj:
-            self._vnc_lib.chown(iip_obj.uuid, si.parent_key)
-        if iipv6_obj:
-            self._vnc_lib.chown(iipv6_obj.uuid, si.parent_key)
 
         # set mac address
         if vmi_create:

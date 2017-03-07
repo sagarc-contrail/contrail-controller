@@ -8,11 +8,11 @@ from cfgm_common import jsonutils as json
 from netaddr import IPAddress, IPNetwork
 import argparse
 from cStringIO import StringIO
+import cgitb
 
 import kazoo.client
 import kazoo.exceptions
 import cfgm_common
-from cfgm_common import vnc_cgitb
 from cfgm_common.utils import cgitb_hook
 from cfgm_common.ifmap.client import client
 from cfgm_common.ifmap.request import NewSessionRequest
@@ -64,6 +64,7 @@ class ZkVNIdMissingError(AuditError): pass
 class RTCountMismatchError(AuditError): pass
 class CassRTRangeError(AuditError): pass
 class ZkRTRangeError(AuditError): pass
+class ZkIpReserveError(AuditError): pass
 class ZkIpMissingError(AuditError): pass
 class ZkIpExtraError(AuditError): pass
 class ZkSubnetMissingError(AuditError): pass
@@ -767,6 +768,16 @@ class DatabaseChecker(DatabaseManager):
                 ret_errors.append(ZkIpMissingError(errmsg))
             # end all cassandra extra ips
 
+            # check gateway ip present/reserved in zookeeper
+            reservations = [
+                (sn_start, 'subnet start'),
+                (sn_gw_ip, 'subnet gateway'),
+                (sn_dns, 'subnet dns')]
+            for addr, msg in reservations:
+                if addr and addr not in zk_ips:
+                    errmsg = '%s ip %s in vn %s not reserved in zookeeper' \
+                        %(msg, addr, vn)
+                    ret_errors.append(ZkIpReserveError(errmsg))
         # for all common VN/subnets
 
         return ret_errors
@@ -1452,7 +1463,7 @@ class DatabaseHealer(DatabaseManager):
 # end class DatabaseCleaner
 
 def db_check(args_str):
-    vnc_cgitb.enable(format='text')
+    cgitb.enable(format='text')
 
     db_checker = DatabaseChecker(args_str)
     # Mode and node count check across all nodes
@@ -1469,7 +1480,7 @@ def db_check(args_str):
 # end db_check
 
 def db_clean(args_str):
-    vnc_cgitb.enable(format='text')
+    cgitb.enable(format='text')
 
     db_cleaner = DatabaseCleaner(args_str)
     db_cleaner.clean_obj_missing_mandatory_fields()
@@ -1484,7 +1495,7 @@ def db_clean(args_str):
 # end db_clean
 
 def db_heal(args_str):
-    vnc_cgitb.enable(format='text')
+    cgitb.enable(format='text')
 
     db_healer = DatabaseHealer(args_str)
     db_healer.heal_fq_name_index()

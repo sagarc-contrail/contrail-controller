@@ -11,6 +11,7 @@ from cfgm_common.zkclient import ZookeeperClient
 from gevent import monkey
 monkey.patch_all()
 from cfgm_common.vnc_kombu import VncKombuClient
+import cgitb
 import sys
 import argparse
 import requests
@@ -31,7 +32,6 @@ from pysandesh.gen_py.process_info.ttypes import ConnectionType as ConnType
 from pysandesh.gen_py.process_info.ttypes import ConnectionStatus
 import discoveryclient.client as client
 from cfgm_common.exceptions import ResourceExhaustionError
-from cfgm_common.exceptions import NoIdError
 from vnc_api.vnc_api import VncApi
 from cfgm_common.uve.nodeinfo.ttypes import NodeStatusUVE, \
     NodeStatus
@@ -41,7 +41,6 @@ from db import DBBaseDM, BgpRouterDM, PhysicalRouterDM, PhysicalInterfaceDM,\
     GlobalVRouterConfigDM, FloatingIpDM, InstanceIpDM, DMCassandraDB, PortTupleDM
 from physical_router_config import PushConfigState
 from cfgm_common.dependency_tracker import DependencyTracker
-from cfgm_common import vnc_cgitb
 from cfgm_common.utils import cgitb_hook
 
 
@@ -313,8 +312,6 @@ class DeviceManager(object):
             if oper_info['oper'] == 'CREATE':
                 obj_dict = oper_info['obj_dict']
                 obj_id = obj_dict['uuid']
-                self._cassandra.cache_uuid_to_fq_name_add(
-                    obj_id, obj_dict['fq_name'], obj_type)
                 obj = obj_class.locate(obj_id, obj_dict)
                 dependency_tracker = DependencyTracker(
                     DBBaseDM.get_obj_type_map(), self._REACTION_MAP)
@@ -329,14 +326,7 @@ class DeviceManager(object):
                     old_dt.evaluate(obj_type, obj)
                 else:
                     obj = obj_class.locate(obj_id)
-                try:
-                    if not obj:
-                        raise NoIdError(obj_id)
-                    obj.update()
-                except NoIdError:
-                    self.config_log('update: object not found <%s, %s>'%(obj_type, obj_id),
-                                       level=SandeshLevel.SYS_INFO)
-                    return
+                obj.update()
                 dependency_tracker = DependencyTracker(
                     DBBaseDM.get_obj_type_map(), self._REACTION_MAP)
                 dependency_tracker.evaluate(obj_type, obj)
@@ -350,7 +340,6 @@ class DeviceManager(object):
                                 set(ids))
             elif oper_info['oper'] == 'DELETE':
                 obj_id = oper_info['uuid']
-                self._cassandra.cache_uuid_to_fq_name_del(obj_id)
                 obj = obj_class.get(obj_id)
                 if obj is None:
                     return
@@ -607,7 +596,7 @@ def run_device_manager(args):
 
 
 def server_main():
-    vnc_cgitb.enable(format='text')
+    cgitb.enable(format='text')
     main()
 # end server_main
 

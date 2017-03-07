@@ -334,12 +334,13 @@ size_t HttpConnection::GetOffset() {
     return offset_;
 }
 
-HttpClient::HttpClient(EventManager *evm, std::string task_name) :
-  TcpServer(evm),
-  curl_timer_(TimerManager::CreateTimer(*evm->io_service(), task_name,
-              TaskScheduler::GetInstance()->GetTaskId(task_name), 0)),
-  id_(0), work_queue_(TaskScheduler::GetInstance()->GetTaskId(task_name), 0,
-              boost::bind(&HttpClient::DequeueEvent, this, _1)) {
+HttpClient::HttpClient(EventManager *evm) : 
+  TcpServer(evm) , 
+  curl_timer_(TimerManager::CreateTimer(*evm->io_service(), "http client",
+              TaskScheduler::GetInstance()->GetTaskId("http client"), 0)),
+  id_(0), work_queue_(TaskScheduler::GetInstance()->GetTaskId("http client"), 0,
+              boost::bind(&HttpClient::DequeueEvent, this, _1)),
+  shutdown_(false) {
     gi_ = (struct _GlobalInfo *)malloc(sizeof(struct _GlobalInfo));
     memset(gi_, 0, sizeof(struct _GlobalInfo));
 }
@@ -356,27 +357,13 @@ void HttpClient::ShutdownInternal() {
     TimerManager::DeleteTimer(curl_timer_);
     SessionShutdown();
     
-    /* Schedule a shutdown of WorkQueue */
-    work_queue_.ScheduleShutdown();
+    shutdown_ = true;
     assert(!map_.size());
 }
 
-/*
- * Ensure task that calls this function is not mutually exclusive
- * to the task that runs HttpClient::ShutdownInternal()
- *
- * Tight loop to check the Callback has been scheduled
-*/
 void HttpClient::Shutdown() {
     work_queue_.Enqueue(boost::bind(&HttpClient::ShutdownInternal, 
                         this));
-
-    uint32_t count = 0;
-    while (!(work_queue_.deleted() == true) && count++ < 10000) {
-        usleep(1000);
-    }
-
-    assert(work_queue_.deleted() == true);
 }
 
 HttpClient::~HttpClient() {

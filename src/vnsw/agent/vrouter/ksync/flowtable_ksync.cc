@@ -11,9 +11,9 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/types.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
-#include <asm/types.h>
+//WINDOWS #include <sys/ipc.h>
+//WINDOWS #include <sys/shm.h>
+//WINDOWS #include <asm/types.h>
 #include <boost/asio.hpp>
 #include <boost/asio/buffer.hpp>
 
@@ -224,7 +224,7 @@ int FlowTableKSyncEntry::Encode(sandesh_op::type op, char *buf, int buf_len) {
     req.set_fr_flow_vrf(flow_entry_->data().vrf);
     uint16_t flags = 0;
 
-    if (op == sandesh_op::DELETE) {
+    if (op == sandesh_op::DEL) {
         if (hash_id_ == FlowEntry::kInvalidFlowHandle) {
             return 0;
         }
@@ -329,14 +329,13 @@ int FlowTableKSyncEntry::Encode(sandesh_op::type op, char *buf, int buf_len) {
                 }
             }
 
-            //Link local, flag determines relaxed policy
-            if (nat_flow->is_flags_set(FlowEntry::LinkLocalBindLocalSrcPort)) {
+            //TODO Seperate flags for BgpRouterService??
+            if (nat_flow->is_flags_set(FlowEntry::LinkLocalBindLocalSrcPort) ||
+                nat_flow->is_flags_set(FlowEntry::BgpRouterService)) {
                 flags |= VR_FLOW_FLAG_LINK_LOCAL;
-            }
-
-            //Bgp service, flag determines relaxed policy
-            if (nat_flow->is_flags_set(FlowEntry::BgpRouterService)) {
-                flags |= VR_FLOW_BGP_SERVICE;
+                if (nat_flow->is_flags_set(FlowEntry::BgpRouterService)) {
+                    flags |= VR_FLOW_BGP_SERVICE;
+                }
             }
 
             flags |= VR_FLOW_FLAG_VRFT;
@@ -495,7 +494,7 @@ int FlowTableKSyncEntry::ChangeMsg(char *buf, int buf_len) {
 }
 
 int FlowTableKSyncEntry::DeleteMsg(char *buf, int buf_len) {
-    return Encode(sandesh_op::DELETE, buf, buf_len);
+    return Encode(sandesh_op::DEL, buf, buf_len);
 }
 
 std::string FlowTableKSyncEntry::ToString() const {
@@ -532,8 +531,19 @@ void FlowTableKSyncEntry::ErrorHandler(int err, uint32_t seq_no,
                     ":", VrouterError(err), ">. Object <", ToString(),
                     ">. Operation <", AckOperationString(event),
                     ">. Message number :", seq_no);
+        return;
     }
-    return;
+    if (err == EINVAL && IgnoreVrouterError()) {
+        return;
+    }
+    KSyncEntry::ErrorHandler(err, seq_no, event);
+}
+
+bool FlowTableKSyncEntry::IgnoreVrouterError() const {
+    if (flow_entry_->deleted())
+        return true;
+
+    return false;
 }
 
 std::string FlowTableKSyncEntry::VrouterError(uint32_t error) const {

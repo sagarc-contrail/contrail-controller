@@ -40,7 +40,7 @@ bool AgentQosConfig::DBEntrySandesh(Sandesh *sresp, std::string &name) const {
         static_cast<AgentQosConfigSandeshResp *>(sresp);
     AgentQosConfigSandeshData data;
 
-    data.set_uuid(UuidToString(uuid_));
+    data.set_uuid(UUIDToString(uuid_));
     data.set_name(name_);
     data.set_id(id_);
     if (type_ == VHOST) {
@@ -208,11 +208,6 @@ bool AgentQosConfig::Change(const DBRequest *req) {
     bool ret = false;
     const AgentQosConfigData *data =
         static_cast<const AgentQosConfigData *>(req->data.get());
-
-    //Ignore change notification if entry node is marked for deletion
-    if ((data->ifmap_node() == NULL) || (data->ifmap_node()->IsDeleted())) {
-        return ret;
-    }
 
     if (name_ != data->name_) {
         name_ = data->name_;

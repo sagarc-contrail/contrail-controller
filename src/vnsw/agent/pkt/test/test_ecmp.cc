@@ -226,28 +226,10 @@ public:
             ControllerVmRoute::MakeControllerVmRoute(bgp_peer,
                                agent_->fabric_vrf_name(), agent_->router_id(),
                                vrf_name, addr, TunnelType::GREType(), 16,
-                               vn_list, SecurityGroupList(), PathPreference(),
-                               false, EcmpLoadBalance());
+                               vn_list, SecurityGroupList(),
+                               PathPreference(), false, EcmpLoadBalance());
         InetUnicastAgentRouteTable::AddRemoteVmRouteReq(bgp_peer,
             vrf_name, addr, plen, data);
-    }
-
-    void AddRemoteEvpnVmRoute(const string &vrf_name, const string &mac,
-                              uint32_t label, const string &vn,
-                              const char *nh_ip) {
-        const Ip4Address nh_addr = Ip4Address::from_string(nh_ip);
-        VnListType vn_list;
-        vn_list.insert(vn);
-        ControllerVmRoute *data = ControllerVmRoute::MakeControllerVmRoute
-            (bgp_peer, agent_->fabric_vrf_name(), agent_->router_id(),
-             vrf_name, nh_addr, TunnelType::GREType(), label, vn_list,
-             SecurityGroupList(), PathPreference(), false, EcmpLoadBalance());
-
-        EvpnAgentRouteTable *rt_table = static_cast<EvpnAgentRouteTable *>
-            (agent_->vrf_table()->GetEvpnRouteTable(vrf_name));
-        rt_table->AddRemoteVmRouteReq(bgp_peer, vrf_name,
-                                      MacAddress::FromString(mac), Ip4Address(),
-                                      0, data);
     }
 
     void DeleteRemoteRoute(const string vrf_name, const string ip,
@@ -255,13 +237,6 @@ public:
         Ip4Address server_ip = Ip4Address::from_string(ip);
         agent_->fabric_inet4_unicast_table()->DeleteReq(bgp_peer,
                 vrf_name, server_ip, plen, new ControllerVmRoute(bgp_peer));
-    }
-
-    void DeleteRemoteEvpnRoute(const string &vrf_name, const string &mac) {
-        agent_->fabric_evpn_table()->DeleteReq(bgp_peer, vrf_name,
-                                               MacAddress::FromString(mac),
-                                               Ip4Address(), 0,
-                                               new ControllerVmRoute(bgp_peer));
     }
 
     uint32_t eth_intf_id_;
@@ -2397,51 +2372,6 @@ TEST_F(EcmpTest, VgwFlag) {
     InetInterface::DeleteReq(agent->interface_table(), "vgw1");
     client->WaitForIdle();
     WAIT_FOR(1000, 1000, (get_flow_proto()->FlowCount() == 0));
-}
-
-// Test that flow direction is not changed based on packet trapped for
-// ECMP resolution
-TEST_F(EcmpTest, FlowDir_Fwd_Rev_1) {
-    // Create ECMP route for address reachable on fabric
-    ComponentNHKeyList local_comp_nh;
-    AddRemoteEcmpRoute("vrf2", "20.1.1.0", 24, "vn2", 2, local_comp_nh);
-    client->WaitForIdle();
-    AddRemoteEvpnVmRoute("vrf2", "00:00:00:10:00:01", 100, "vn2", "10.10.10.2");
-    client->WaitForIdle();
-
-    VmInterface *vmi = static_cast<VmInterface *>(VmPortGet(1));
-    TxIpMplsPacket(eth_intf_id_, "10.10.10.10",
-                   agent_->router_id().to_string().c_str(),
-                   vmi->label(), "20.1.1.1", "1.1.1.1", 1);
-    client->WaitForIdle();
-
-    // Validate forward flow is not ECMP
-    FlowEntry *entry = FlowGet(VrfGet("vrf2")->vrf_id(),
-                               "20.1.1.1", "1.1.1.1", 1, 0, 0,
-                               GetFlowKeyNH(1));
-    EXPECT_TRUE(entry != NULL);
-    EXPECT_TRUE(entry->data().component_nh_idx =
-                CompositeNH::kInvalidComponentNHIdx);
-    EXPECT_TRUE(entry->IsForwardFlow());
-
-    // Validate reverse flow is ECMP
-    FlowEntry *rev_entry = entry->reverse_flow_entry();
-    EXPECT_TRUE(rev_entry->data().component_nh_idx !=
-            CompositeNH::kInvalidComponentNHIdx);
-    EXPECT_TRUE(rev_entry->IsReverseFlow());
-
-    // Trap reverse flow for ECMP resolution
-    TxIpPacketEcmp(VmPortGetId(1), "1.1.1.1", "20.1.1.1", 1);
-    client->WaitForIdle();
-
-    // Ensure no new flows are added because of ECMP resolution
-    WAIT_FOR(1000, 1000, (get_flow_proto()->FlowCount() == 2));
-
-    // Validate forward/reverse flow flags are not modified
-    EXPECT_TRUE(entry->IsForwardFlow());
-    EXPECT_TRUE(rev_entry->IsReverseFlow());
-
-    DeleteRemoteRoute("vrf2", "20.1.1.0", 24);
 }
 
 int main(int argc, char *argv[]) {

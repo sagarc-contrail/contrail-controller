@@ -1,6 +1,8 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
+#include <boost/asio.hpp>
+#include <windows.h>
 
 #include <base/misc_utils.h>
 #include <cmn/dns.h>
@@ -22,6 +24,9 @@ void DnsUveClient::SendDnsUve(uint64_t start_time) {
         state.set_start_time(start_time);
         state.set_collector(Dns::GetCollector());
 
+        vector<string> list;
+        MiscUtils::GetCoreFileList(Dns::GetProgramName(), list);
+        state.set_core_files_list(list);
         vector<string> ip_list;
         ip_list.push_back(Dns::GetSelfIp());
         state.set_self_ip_list(ip_list);

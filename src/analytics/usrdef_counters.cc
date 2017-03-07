@@ -21,13 +21,8 @@ UserDefinedCounters::UserDefinedCounters(EventManager *evm,
 void
 UserDefinedCounters::InitVnc(EventManager *evm, VncApiConfig *vnccfg)
 {
-    if (vnccfg) {
-        if (!vnc_) {
-            vnc_.reset(new VncApi(evm, vnccfg));
-        } else {
-            vnc_->SetApiServerAddress();
-        }
-    }
+    VncApi *v = vnccfg?new VncApi(evm, vnccfg):0;
+    vnc_.reset(v);
 }
 
 UserDefinedCounters::~UserDefinedCounters()
@@ -80,9 +75,10 @@ UserDefinedCounters::UDCHandler(rapidjson::Document &jdoc,
                         std::cout << "\nname: " << name << "\npattern: "
                             << patrn << "\n";
                     }
-                    Cfg_t::iterator cit=config_.begin();
-                    while (cit != config_.end()) {
-                        Cfg_t::iterator dit = cit++;
+                    for(Cfg_t::iterator cit=config_.begin();
+                            cit != config_.end(); ++cit) {
+                        Cfg_t::iterator dit = cit;
+                        ++cit;
                         if (!dit->second->IsRefreshed()) {
                             UserDefinedLogStatistic udc;
                             udc.set_name(dit->first);
@@ -149,11 +145,9 @@ UserDefinedCounters::Update(Options *o, DiscoveryServiceClient *c) {
 void
 UserDefinedCounters::APIfromDisc(Options *o, std::vector<DSResponse> response)
 {
-    tbb::mutex::scoped_lock lock(mutex_);
     if (api_svr_list_.empty()) {
         api_svr_list_ = response;
         if (!api_svr_list_.empty()) {
-            lock.release();
             vnccfg_.ks_srv_ip          = o->auth_host();
             vnccfg_.ks_srv_port        = o->auth_port();
             vnccfg_.protocol           = o->auth_protocol();
@@ -163,20 +157,15 @@ UserDefinedCounters::APIfromDisc(Options *o, std::vector<DSResponse> response)
 
             RetryNextApi();
         }
-    } else {
-        api_svr_list_.erase(api_svr_list_.begin(), api_svr_list_.end());
-        api_svr_list_ = response;
     }
 }
 
 void
 UserDefinedCounters::RetryNextApi()
 {
-    tbb::mutex::scoped_lock lock(mutex_);
     if (!api_svr_list_.empty()) {
         DSResponse api = api_svr_list_.back();
         api_svr_list_.pop_back();
-        lock.release();
         vnccfg_.cfg_srv_ip         = api.ep.address().to_string();
         vnccfg_.cfg_srv_port       = api.ep.port();
         InitVnc(evm_, &vnccfg_);

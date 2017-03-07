@@ -18,13 +18,13 @@ reload(sys)
 sys.setdefaultencoding('UTF8')
 import requests
 import ConfigParser
+import cgitb
 
 import argparse
 import socket
 
 from cfgm_common import vnc_cpu_info
 
-from cfgm_common import vnc_cgitb
 from cfgm_common.exceptions import *
 from config_db import *
 
@@ -266,8 +266,6 @@ class SchemaTransformer(object):
             if oper == 'CREATE':
                 obj_dict = oper_info['obj_dict']
                 obj_fq_name = ':'.join(obj_dict['fq_name'])
-                self._cassandra.cache_uuid_to_fq_name_add(
-                    obj_id, obj_dict['fq_name'], obj_type)
                 obj = obj_class.locate(obj_fq_name)
                 if obj is None:
                     self.config_log('%s id %s fq_name %s not found' % (
@@ -306,7 +304,6 @@ class SchemaTransformer(object):
                                 set(dependency_tracker.resources[resource]) |
                                 set(ids))
             elif oper == 'DELETE':
-                self._cassandra.cache_uuid_to_fq_name_del(obj_id)
                 obj = obj_class.get_by_uuid(obj_id)
                 if obj is None:
                     return
@@ -618,6 +615,33 @@ class SchemaTransformer(object):
 
 
 def parse_args(args_str):
+    '''
+    Eg. python to_bgp.py --rabbit_server localhost
+                         --rabbit_port 5672
+                         --rabbit_user guest
+                         --rabbit_password guest
+                         --cassandra_server_list 10.1.2.3:9160
+                         --api_server_ip 10.1.2.3
+                         --api_server_port 8082
+                         --api_server_use_ssl False
+                         --zk_server_ip 10.1.2.3
+                         --zk_server_port 2181
+                         --collectors 127.0.0.1:8086
+                         --disc_server_ip 127.0.0.1
+                         --disc_server_port 5998
+                         --http_server_port 8090
+                         --log_local
+                         --log_level SYS_DEBUG
+                         --log_category test
+                         --log_file <stdout>
+                         --trace_file /var/log/contrail/schema.err
+                         --use_syslog
+                         --syslog_facility LOG_USER
+                         --cluster_id <testbed-name>
+                         [--reset_config]
+    '''
+
+    # Source any specified config/ini file
     # Turn off help, so we      all options in response to -h
     conf_parser = argparse.ArgumentParser(add_help=False)
 
@@ -654,14 +678,12 @@ def parse_args(args_str):
         'logger_class': None,
         'sandesh_send_rate_limit': SandeshSystem.get_sandesh_send_rate_limit(),
         'bgpaas_port_start': 50000,
-        'bgpaas_port_end': 50512,
+        'bgpaas_port_end': 50256,
         'rabbit_use_ssl': False,
         'kombu_ssl_version': '',
         'kombu_ssl_keyfile': '',
         'kombu_ssl_certfile': '',
         'kombu_ssl_ca_certs': '',
-        'zk_timeout': 400,
-        'logical_routers_enabled': True,
     }
     secopts = {
         'use_certs': False,
@@ -708,11 +730,6 @@ def parse_args(args_str):
     defaults.update(ksopts)
     defaults.update(cassandraopts)
     parser.set_defaults(**defaults)
-    def _bool(s):
-        """Convert string to bool (in argparse context)."""
-        if s.lower() not in ['true', 'false']:
-            raise ValueError('Need bool; got %r' % s)
-        return {'true': True, 'false': False}[s.lower()]
 
     parser.add_argument(
         "--cassandra_server_list",
@@ -783,10 +800,6 @@ def parse_args(args_str):
                         help="Start port for bgp-as-a-service proxy")
     parser.add_argument("--bgpaas_port_end", type=int,
                         help="End port for bgp-as-a-service proxy")
-    parser.add_argument("--zk_timeout", type=int,
-                        help="Timeout for ZookeeperClient")
-    parser.add_argument("--logical_routers_enabled", type=_bool,
-                        help="Enabled logical routers")
 
     args = parser.parse_args(remaining_argv)
     if type(args.cassandra_server_list) is str:
@@ -846,8 +859,7 @@ def main(args_str=None):
     else:
         client_pfx = ''
         zk_path_pfx = ''
-    _zookeeper_client = ZookeeperClient(client_pfx+"schema", args.zk_server_ip,
-                                        zk_timeout =args.zk_timeout)
+    _zookeeper_client = ZookeeperClient(client_pfx+"schema", args.zk_server_ip)
     _zookeeper_client.master_election(zk_path_pfx + "/schema-transformer",
                                       os.getpid(), run_schema_transformer,
                                       args)
@@ -855,7 +867,7 @@ def main(args_str=None):
 
 
 def server_main():
-    vnc_cgitb.enable(format='text')
+    cgitb.enable(format='text')
     main()
 # end server_main
 

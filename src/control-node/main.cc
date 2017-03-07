@@ -216,6 +216,13 @@ static bool ControlNodeInfoLogger(BgpServer *server,
         change = true;
     }
 
+    vector<string> list;
+    MiscUtils::GetCoreFileList(ControlNode::GetProgramName(), list);
+    if (first || state.get_core_files_list() != list) {
+        state.set_core_files_list(list);
+        change = true;
+    }
+
     // Send Build information.
     string build_info;
     MiscUtils::GetBuildInfo(MiscUtils::ControlNode, BuildInfo, build_info);
@@ -545,7 +552,7 @@ int main(int argc, char *argv[]) {
             boost::bind(&ControlNodeInfoLogger,
                         bgp_server.get(), bgp_peer_manager.get(),
                         &ifmap_server, node_info_log_timer.get()),
-            TaskScheduler::GetInstance()->GetTaskId("bgp::ShowCommand"), 0));
+            TaskScheduler::GetInstance()->GetTaskId("bgp::Uve"), 0));
 
     // Start periodic timer to send BGPRouterInfo UVE.
     node_info_log_timer->Start(

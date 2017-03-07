@@ -194,14 +194,11 @@ public:
         string instance_name = neighbor_config->instance_name();
         RoutingInstanceMgr *ri_mgr = server_->routing_instance_mgr();
         RoutingInstance *rti = ri_mgr->GetRoutingInstance(instance_name);
-        if (!rti)
-            return;
+        assert(rti);
+        PeerManager *peer_manager = rti->LocatePeerManager();
 
         if (event == BgpConfigManager::CFG_ADD ||
             event == BgpConfigManager::CFG_CHANGE) {
-            if (rti->deleted())
-                return;
-            PeerManager *peer_manager = rti->LocatePeerManager();
             BgpPeer *peer = peer_manager->PeerLocate(server_, neighbor_config);
             if (peer) {
                 server_->RemovePeer(peer->endpoint(), peer);
@@ -209,7 +206,6 @@ public:
                 server_->InsertPeer(peer->endpoint(), peer);
             }
         } else if (event == BgpConfigManager::CFG_DELETE) {
-            PeerManager *peer_manager = rti->peer_manager();
             BgpPeer *peer = peer_manager->TriggerPeerDeletion(neighbor_config);
             if (peer) {
                 server_->RemovePeer(peer->endpoint(), peer);
@@ -459,42 +455,35 @@ BgpPeer *BgpServer::FindPeer(const string &name) {
     return (loc != peer_list_.end() ? loc->second : NULL);
 }
 
-BgpPeer *BgpServer::FindNextPeer(const string &name) {
-    BgpPeerList::iterator loc = peer_list_.upper_bound(name);
-    return (loc != peer_list_.end() ? loc->second : NULL);
-}
-
 void BgpServer::InsertPeer(TcpSession::Endpoint remote, BgpPeer *peer) {
     if (!remote.port() && remote.address().is_unspecified())
         return;
+
+    EndpointToBgpPeerList::iterator loc = endpoint_peer_list_.find(remote);
+    if (loc != endpoint_peer_list_.end()) {
+        loc->second->Clear(BgpProto::Notification::PeerDeconfigured);
+        endpoint_peer_list_.erase(loc);
+    }
     endpoint_peer_list_.insert(make_pair(remote, peer));
 }
 
 void BgpServer::RemovePeer(TcpSession::Endpoint remote, BgpPeer *peer) {
-    EndpointPeerList::iterator loc = endpoint_peer_list_.lower_bound(remote);
-    while (loc != endpoint_peer_list_.end() && loc->first == remote) {
-        if (loc->second == peer) {
-            endpoint_peer_list_.erase(loc);
-            break;
-        }
-        ++loc;
+    EndpointToBgpPeerList::iterator loc = endpoint_peer_list_.find(remote);
+    if (loc != endpoint_peer_list_.end() && loc->second == peer) {
+        endpoint_peer_list_.erase(loc);
     }
 }
 
 BgpPeer *BgpServer::FindPeer(TcpSession::Endpoint remote) const {
-    EndpointPeerList::const_iterator loc = endpoint_peer_list_.find(remote);
+    EndpointToBgpPeerList::const_iterator loc =
+        endpoint_peer_list_.find(remote);
     return (loc == endpoint_peer_list_.end() ? NULL : loc->second);
 }
 
-BgpPeer *BgpServer::FindExactPeer(const BgpPeer *peer) const {
-    EndpointPeerList::const_iterator loc =
-        endpoint_peer_list_.lower_bound(peer->endpoint());
-    while (loc != endpoint_peer_list_.end() && loc->first == peer->endpoint()) {
-        if (loc->second == peer)
-            return loc->second;
-        ++loc;
-    }
-    return NULL;
+BgpPeer *BgpServer::FindNextPeer(TcpSession::Endpoint remote) const {
+    EndpointToBgpPeerList::const_iterator loc =
+        endpoint_peer_list_.upper_bound(remote);
+    return (loc == endpoint_peer_list_.end() ? NULL : loc->second);
 }
 
 const string &BgpServer::localname() const {
@@ -727,7 +716,7 @@ void BgpServer::NotifyAllStaticRoutes() {
 }
 
 uint32_t BgpServer::GetStaticRouteCount() const {
-    CHECK_CONCURRENCY("bgp::ShowCommand");
+    CHECK_CONCURRENCY("bgp::Uve");
     uint32_t count = 0;
     for (StaticRouteMgrList::iterator it = srt_manager_list_.begin();
          it != srt_manager_list_.end(); ++it) {
@@ -738,7 +727,7 @@ uint32_t BgpServer::GetStaticRouteCount() const {
 }
 
 uint32_t BgpServer::GetDownStaticRouteCount() const {
-    CHECK_CONCURRENCY("bgp::ShowCommand");
+    CHECK_CONCURRENCY("bgp::Uve");
     uint32_t count = 0;
     for (StaticRouteMgrList::iterator it = srt_manager_list_.begin();
          it != srt_manager_list_.end(); ++it) {
@@ -781,13 +770,6 @@ uint32_t BgpServer::SendTableStatsUve(bool first) const {
                     table->GetSecondaryPathCount()) {
                 changed = true;
                 table->stats()->set_secondary_paths(
-                    table->GetSecondaryPathCount());
-            }
-
-            if (first || table->stats()->get_infeasible_paths() !=
-                    table->GetInfeasiblePathCount()) {
-                changed = true;
-                table->stats()->set_infeasible_paths(
                     table->GetSecondaryPathCount());
             }
 
@@ -844,7 +826,7 @@ void BgpServer::FillPeerStats(const BgpPeer *peer) const {
 }
 
 bool BgpServer::CollectStats(BgpRouterState *state, bool first) const {
-    CHECK_CONCURRENCY("bgp::ShowCommand");
+    CHECK_CONCURRENCY("bgp::Uve");
 
     VisitBgpPeers(boost::bind(&BgpServer::FillPeerStats, this, _1));
     bool change = false;

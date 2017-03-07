@@ -317,7 +317,7 @@ private:
 };
 
 struct FlowMgmtKeyCmp {
-    bool operator()(const FlowMgmtKey *l, const FlowMgmtKey *r) {
+    bool operator()(const FlowMgmtKey *l, const FlowMgmtKey *r) const {
         return l->IsLess(r);
     }
 };
@@ -397,8 +397,6 @@ public:
     // and DBEntry delete message is got from FlowTable
     virtual bool Delete(FlowMgmtKey *key, FlowEntry *flow,
                         FlowMgmtKeyNode *node);
-    virtual void InsertEntry(FlowMgmtKey *key, FlowMgmtEntry *entry);
-    virtual void RemoveEntry(Tree::iterator it);
 
     // Handle DBEntry add
     virtual bool OperEntryAdd(const FlowMgmtRequest *req, FlowMgmtKey *key);
@@ -535,11 +533,13 @@ public:
     void ExtractKeys(FlowEntry *flow, FlowMgmtKeyTree *tree);
     FlowMgmtEntry *Allocate(const FlowMgmtKey *key);
 
+    bool Add(FlowMgmtKey *key, FlowEntry *flow, FlowMgmtKeyNode *node);
+    bool Delete(FlowMgmtKey *key, FlowEntry *flow, FlowMgmtKeyNode *node);
+    bool OperEntryAdd(const FlowMgmtRequest *req, FlowMgmtKey *key);
+    bool OperEntryDelete(const FlowMgmtRequest *req, FlowMgmtKey *key);
     void VnFlowCounters(const VnEntry *vn,
                         uint32_t *ingress_flow_count,
                         uint32_t *egress_flow_count);
-    void RemoveEntry(Tree::iterator it);
-    void InsertEntry(FlowMgmtKey *key, FlowMgmtEntry *entry);
 private:
     // We need to support query of counters in VN from other threads.
     // So, implement synchronization on access to VN Flow Tree
@@ -562,17 +562,10 @@ private:
 
 class InterfaceFlowMgmtEntry : public FlowMgmtEntry {
 public:
-    InterfaceFlowMgmtEntry() : FlowMgmtEntry(), flow_created_(0),
-        flow_aged_(0) { }
+    InterfaceFlowMgmtEntry() : FlowMgmtEntry() { }
     virtual ~InterfaceFlowMgmtEntry() { }
 
-    bool Add(FlowEntry *flow, FlowMgmtKeyNode *node);
-    bool Delete(FlowEntry *flow, FlowMgmtKeyNode *node);
-    uint64_t flow_created() const {return flow_created_;}
-    uint64_t flow_aged() const {return flow_aged_;}
 private:
-    uint64_t flow_created_;
-    uint64_t flow_aged_;
     DISALLOW_COPY_AND_ASSIGN(InterfaceFlowMgmtEntry);
 };
 
@@ -583,14 +576,7 @@ public:
 
     void ExtractKeys(FlowEntry *flow, FlowMgmtKeyTree *tree);
     FlowMgmtEntry *Allocate(const FlowMgmtKey *key);
-    void InterfaceFlowCount(const Interface *itf, uint64_t *created,
-                            uint64_t *aged, uint32_t *active_flows);
-    void InsertEntry(FlowMgmtKey *key, FlowMgmtEntry *entry);
-    void RemoveEntry(Tree::iterator it);
 private:
-    // We need to support query of counters in Interface from other threads.
-    // So, implement synchronization on access to Interface Flow Tree
-    tbb::mutex mutex_;
     DISALLOW_COPY_AND_ASSIGN(InterfaceFlowMgmtTree);
 };
 
@@ -754,22 +740,7 @@ public:
         }
 
         return NULL;
-    } 
-
-    bool Match(const IpAddress &match_ip) const {
-        if (ip_.is_v4()) {
-            return (Address::GetIp4SubnetAddress(ip_.to_v4(), plen_) ==
-                    Address::GetIp4SubnetAddress(match_ip.to_v4(), plen_));
-        } else if (ip_.is_v6()) {
-            return (Address::GetIp6SubnetAddress(ip_.to_v6(), plen_) ==
-                    Address::GetIp6SubnetAddress(match_ip.to_v6(), plen_));
-        }
-        assert(0);
-        return false;
     }
-
-    bool NeedsReCompute(const FlowEntry *flow);
-
 
 private:
     friend class InetRouteFlowMgmtTree;
@@ -783,10 +754,7 @@ class InetRouteFlowMgmtEntry : public RouteFlowMgmtEntry {
 public:
     InetRouteFlowMgmtEntry() : RouteFlowMgmtEntry() { }
     virtual ~InetRouteFlowMgmtEntry() { }
-    // Handle covering routeEntry
-    bool RecomputeCoveringRouteEntry(FlowMgmtManager *mgr,
-                                     InetRouteFlowMgmtKey *covering_route,
-                                     InetRouteFlowMgmtKey *key);
+
 private:
     DISALLOW_COPY_AND_ASSIGN(InetRouteFlowMgmtEntry);
 };
@@ -830,9 +798,6 @@ public:
             delete rt_key;
         }
     }
-   bool RecomputeCoveringRoute(InetRouteFlowMgmtKey *covering_route,
-                               InetRouteFlowMgmtKey *key);
-
 private:
     LpmTree lpm_tree_;
     DISALLOW_COPY_AND_ASSIGN(InetRouteFlowMgmtTree);
@@ -1108,8 +1073,7 @@ public:
     void AddEvent(FlowEntry *low);
     void DeleteEvent(FlowEntry *flow, const RevFlowDepParams &params);
     void FlowStatsUpdateEvent(FlowEntry *flow, uint32_t bytes, uint32_t packets,
-                              uint32_t oflow_bytes,
-                              const boost::uuids::uuid &u);
+                              uint32_t oflow_bytes);
     void AddDBEntryEvent(const DBEntry *entry, uint32_t gen_id);
     void ChangeDBEntryEvent(const DBEntry *entry, uint32_t gen_id);
     void DeleteDBEntryEvent(const DBEntry *entry, uint32_t gen_id);
@@ -1121,8 +1085,6 @@ public:
     void VnFlowCounters(const VnEntry *vn,
                         uint32_t *ingress_flow_count,
                         uint32_t *egress_flow_count);
-    void InterfaceFlowCount(const Interface *itf, uint64_t *created,
-                            uint64_t *aged, uint32_t *active_flows);
     bool HasVrfFlows(uint32_t vrf);
 
     FlowMgmtDbClient *flow_mgmt_dbclient() const {
@@ -1146,7 +1108,7 @@ private:
     // Handle Delete of a flow. Updates FlowMgmtKeyTree for all objects
     void DeleteFlow(FlowEntryPtr &flow, const RevFlowDepParams &p);
     void UpdateFlowStats(FlowEntryPtr &flow, uint32_t bytes, uint32_t packets,
-                         uint32_t oflow_bytes, const boost::uuids::uuid &u);
+                         uint32_t oflow_bytes);
 
     // Add a FlowMgmtKey into the FlowMgmtKeyTree for an object
     // The FlowMgmtKeyTree for object is passed as argument

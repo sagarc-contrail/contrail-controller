@@ -2857,7 +2857,7 @@ void BgpXmppChannelManager::FillPeerInfo(const BgpXmppChannel *channel) const {
 
 bool BgpXmppChannelManager::CollectStats(BgpRouterState *state, bool first)
          const {
-    CHECK_CONCURRENCY("bgp::ShowCommand");
+    CHECK_CONCURRENCY("bgp::Uve");
 
     VisitChannels(boost::bind(&BgpXmppChannelManager::FillPeerInfo, this, _1));
     bool change = false;

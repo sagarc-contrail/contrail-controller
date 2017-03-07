@@ -8,6 +8,14 @@
 #include <netinet/in.h>
 #include <netinet/ip6.h>
 #include <netinet/icmp6.h>
+#ifdef _WINDOWS
+#include <WinSock2.h>
+#include <netinet/udp.h>
+#include <netinet/ip.h>
+#include <netinet/icmp.h>
+#include <netinet/tcp.h>
+
+#endif
 
 #include "cmn/agent_cmn.h"
 #include "net/address_util.h"
@@ -331,6 +339,15 @@ void PktHandler::SetOuterMac(PktInfo *pkt_info) {
 }
 
 
+static bool InterestedIPv6Protocol(uint8_t proto) {
+    if (proto == IPPROTO_UDP || proto == IPPROTO_TCP ||
+        proto == IPPROTO_ICMPV6) {
+        return true;
+    }
+
+    return false;
+}
+
 int PktHandler::ParseEthernetHeader(PktInfo *pkt_info, uint8_t *pkt) {
     int len = 0;
     pkt_info->eth = (struct ether_header *) (pkt + len);
@@ -377,8 +394,23 @@ int PktHandler::ParseIpPacket(PktInfo *pkt_info, PktType::Type &pkt_type,
         pkt_info->ip_daddr = IpAddress(Ip6Address(addr));
         pkt_info->ttl      = ip->ip6_hlim;
 
+        // Look for known transport headers. Fallback to the last header if
+        // no known header is found
         uint8_t proto = ip->ip6_ctlun.ip6_un1.ip6_un1_nxt;
         len += sizeof(ip6_hdr);
+        while (InterestedIPv6Protocol(proto) == false) {
+            struct ip6_ext *ext = (ip6_ext *)(pkt + len);
+            proto = ext->ip6e_nxt;
+            len += (ext->ip6e_len * 8);
+            if (ext->ip6e_len == 0) {
+                proto = 0;
+                break;
+            }
+            if (len >= pkt_info->len) {
+                proto = 0;
+                break;
+            }
+        }
         pkt_info->ip_proto = proto;
     } else {
         assert(0);
@@ -1025,9 +1057,10 @@ std::size_t PktInfo::hash(const EcmpLoadBalance &ecmp_load_balance) const {
             boost::hash_combine(seed, ip_daddr.to_v4().to_ulong());
         }
     } else if (family == Address::INET6) {
+        uint32_t *words;
+
         if (ecmp_load_balance.is_source_ip_set()) {
-            uint32_t words[4];
-            memcpy(words, ip_saddr.to_v6().to_bytes().c_array(), sizeof(words));
+            words = (uint32_t *) (ip_saddr.to_v6().to_bytes().data());
             boost::hash_combine(seed, words[0]);
             boost::hash_combine(seed, words[1]);
             boost::hash_combine(seed, words[2]);
@@ -1035,8 +1068,7 @@ std::size_t PktInfo::hash(const EcmpLoadBalance &ecmp_load_balance) const {
         }
 
         if (ecmp_load_balance.is_destination_ip_set()) {
-            uint32_t words[4];
-            memcpy(words, ip_daddr.to_v6().to_bytes().c_array(), sizeof(words));
+            words = (uint32_t *) (ip_daddr.to_v6().to_bytes().data());
             boost::hash_combine(seed, words[0]);
             boost::hash_combine(seed, words[1]);
             boost::hash_combine(seed, words[2]);

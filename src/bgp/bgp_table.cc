@@ -642,7 +642,7 @@ void BgpTable::DestroyPathResolver() {
 }
 
 size_t BgpTable::GetPendingRiboutsCount(size_t *markers) const {
-    CHECK_CONCURRENCY("bgp::ShowCommand", "bgp::Config");
+    CHECK_CONCURRENCY("bgp::ShowCommand", "bgp::Config", "bgp::Uve");
     size_t count = 0;
     *markers = 0;
 

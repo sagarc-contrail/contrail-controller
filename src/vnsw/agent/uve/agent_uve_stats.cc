@@ -1,6 +1,8 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
+#include <boost/asio.hpp>
+#include <windows.h>
 
 #include <base/cpuinfo.h>
 #include <db/db.h>
@@ -45,10 +47,6 @@ void AgentUveStats::Shutdown() {
 void AgentUveStats::RegisterDBClients() {
     AgentUveBase::RegisterDBClients();
     stats_manager_->RegisterDBClients();
-}
-
-void AgentUveStats::InitDone() {
-    stats_manager_->InitDone();
 }
 
 // The following is deprecated and is present only for backward compatibility

@@ -151,11 +151,10 @@ void OverlayPing::SendRequest() {
     pktdata = (OverlayOamPktData *)(buf + kOverlayUdpHdrLength);
     memset(pktdata, 0, sizeof(OverlayOamPktData));
 
-    senttime_ = microsec_clock::universal_time();
-    FillOamPktHeader(pktdata, vxlan_id, senttime_);
+    FillOamPktHeader(pktdata, vxlan_id);
     DiagPktHandler *pkt_handler = new DiagPktHandler(diag_table_->agent(), pkt_info,
                                    *(diag_table_->agent()->event_manager())->io_service());
-    // Fill outer header
+    // FIll outer header
     pkt_info->eth = (struct ether_header *)(buf);
     pkt_handler->EthHdr(agent->vhost_interface()->mac(), *nh->GetDmac(),
                         ETHERTYPE_IP);
@@ -209,7 +208,10 @@ void OverlayPing::HandleReply(DiagPktHandler *handler) {
     OverlayOamPktData *pktdata = (OverlayOamPktData*) handler->GetData();
     resp->set_seq_no(ntohl(pktdata->seq_no_));
     boost::posix_time::ptime time = microsec_clock::universal_time(); 
-    boost::posix_time::time_duration rtt = time - senttime_;
+    boost::posix_time::time_duration td = time.time_of_day();
+    uint64_t senttime = seconds(pktdata->timesent_sec_).total_microseconds() +
+                 pktdata->timesent_misec_;
+    time_duration  rtt= microseconds(td.total_microseconds() -  senttime);
     avg_rtt_ += rtt;
     std::string rtt_str;
     time_duration_to_string(rtt, rtt_str);

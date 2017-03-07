@@ -5,7 +5,9 @@
 #ifndef vnsw_agent_nexthop_hpp
 #define vnsw_agent_nexthop_hpp
 
+#ifndef _WINDOWS
 #include <netinet/in.h>
+#endif
 #include <net/ethernet.h>
 
 #include <cmn/agent_cmn.h>
@@ -201,6 +203,16 @@ public:
         return mbr_list_.size();
     }
 
+    uint32_t hash(size_t hash) const {
+        for (uint32_t i = 0; i < mbr_list_.size(); i++) {
+            if (hash_table_[hash % hash_table_.size()] != 0xffff) {
+                return hash_table_[hash % hash_table_.size()];
+            }
+            hash++;
+        }
+        return 0;
+    }
+
     uint32_t count() const {
         int cnt = 0;
         for (uint32_t i = 0; i < mbr_list_.size(); i++) {
@@ -371,8 +383,6 @@ public:
     static void FillObjectLogMac(const unsigned char *m,
                                  NextHopObjectLogInfo &info);
     bool NexthopToInterfacePolicy() const;
-
-    virtual bool MatchEgressData(const NextHop *nh) const = 0;
 protected:
     void FillObjectLog(AgentLogEvent::type event,
                        NextHopObjectLogInfo &info) const;
@@ -478,9 +488,6 @@ public:
         return DBEntryBase::KeyPtr(new DiscardNHKey());
     };
 
-    virtual bool MatchEgressData(const NextHop *nh) const {
-        return false;
-    }
     static void Create();
 
 private:
@@ -530,9 +537,6 @@ public:
         return DBEntryBase::KeyPtr(new L2ReceiveNHKey());
     };
 
-    virtual bool MatchEgressData(const NextHop *nh) const {
-        return false;
-    }
     static void Create();
 
 private:
@@ -599,11 +603,6 @@ public:
     static void Create(NextHopTable *table, const string &interface);
     static void Delete(NextHopTable *table, const string &interface);
     const Interface *GetInterface() const {return interface_.get();};
-
-    virtual bool MatchEgressData(const NextHop *nh) const {
-        return false;
-    }
-
 private:
     InterfaceRef interface_;
     DISALLOW_COPY_AND_ASSIGN(ReceiveNH);
@@ -667,11 +666,6 @@ public:
     static void Create(const InterfaceKey *intf, bool policy);
     static void CreateReq(const InterfaceKey *intf, bool policy);
     const Interface* interface() const { return interface_.get();}
-
-    virtual bool MatchEgressData(const NextHop *nh) const {
-        return false;
-    }
-
 private:
     InterfaceConstRef interface_;
     DISALLOW_COPY_AND_ASSIGN(ResolveNH);
@@ -742,15 +736,6 @@ public:
     virtual bool DeleteOnZeroRefCount() const {
         return true;
     }
-
-    virtual bool MatchEgressData(const NextHop *nh) const {
-        const ArpNH *arp_nh = dynamic_cast<const ArpNH *>(nh);
-        if (arp_nh && vrf_ == arp_nh->vrf_ && ip_ == arp_nh->ip_) {
-            return true;
-        }
-        return false;
-    }
-
 private:
     VrfEntryRef vrf_;
     Ip4Address ip_;
@@ -968,15 +953,6 @@ public:
 
     bool relaxed_policy() const { return relaxed_policy_; }
 
-    virtual bool MatchEgressData(const NextHop *nh) const {
-        const InterfaceNH *intf_nh =
-            dynamic_cast<const InterfaceNH *>(nh);
-        if (intf_nh && interface_ == intf_nh->interface_) {
-            return true;
-        }
-        return false;
-    }
-
 private:
     InterfaceRef interface_;
     uint8_t flags_;
@@ -1053,15 +1029,6 @@ public:
     bool flood_unknown_unicast() const {
         return flood_unknown_unicast_;
     }
-
-    virtual bool MatchEgressData(const NextHop *nh) const {
-        const VrfNH *vrf_nh = dynamic_cast<const VrfNH *>(nh);
-        if (vrf_nh && vrf_ == vrf_nh->vrf_) {
-            return true;
-        }
-        return false;
-    }
-
 private:
     VrfEntryRef vrf_;
     // NH created by VXLAN
@@ -1153,14 +1120,6 @@ public:
                           const std::string &vrf_name, const MacAddress &smac,
                           const MacAddress &dmac);
     static void DeleteReq(const uuid &intf_uuid, uint16_t vlan_tag);
-
-    virtual bool MatchEgressData(const NextHop *nh) const {
-        const VlanNH *vlan_nh = dynamic_cast<const VlanNH *>(nh);
-        if (vlan_nh && interface_ == vlan_nh->interface_) {
-            return true;
-        }
-        return false;
-    }
 
 private:
     InterfaceRef interface_;
@@ -1421,27 +1380,16 @@ public:
     const VrfEntry* vrf() const {
         return vrf_.get();
     }
-   uint32_t PickMember(uint32_t seed, const NextHop *affinity_nh) const {
-       uint32_t idx = kInvalidComponentNHIdx;
+   uint32_t hash(uint32_t seed) const {
        size_t size = component_nh_list_.size();
        if (size == 0) {
-           return idx;
+           return kInvalidComponentNHIdx;
        }
-
-       if (affinity_nh != NULL) {
-           ComponentNH comp_nh(0, affinity_nh);
-           if (GetIndex(comp_nh, idx)) {
-               return idx;
-           }
-       }
-
-       idx = seed % size;
-       while (component_nh_list_[idx].get() == NULL ||
-              component_nh_list_[idx]->nh() == NULL ||
-              component_nh_list_[idx]->nh()->IsActive() == false) {
+       uint32_t idx = seed % size;
+       while (component_nh_list_[idx].get() == NULL) {
            idx = (idx + 1) % size;
            if (idx == seed % size) {
-               idx = kInvalidComponentNHIdx;
+               idx = 0xffff;
                break;
            }
        }
@@ -1453,11 +1401,6 @@ public:
    }
    CompositeNH* ChangeTunnelType(Agent *agent, TunnelType::Type type) const;
    const NextHop *GetLocalNextHop() const;
-
-   virtual bool MatchEgressData(const NextHop *nh) const {
-       return false;
-   }
-
 private:
     void CreateComponentNH(Agent *agent, TunnelType::Type type) const;
     void ChangeComponentNHKeyTunnelType(ComponentNHKeyList &component_nh_list,
@@ -1503,7 +1446,7 @@ public:
     virtual bool Delete(DBEntry *entry, const DBRequest *req) {
         NextHop *nh = static_cast<NextHop *>(entry);
         nh->Delete(req);
-        nh->SendObjectLog(this, AgentLogEvent::DELETE);
+        nh->SendObjectLog(this, AgentLogEvent::DEL);
         return true;
     }
 

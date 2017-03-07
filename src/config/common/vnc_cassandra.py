@@ -15,7 +15,8 @@ from pysandesh.connection_info import ConnectionState
 from pysandesh.gen_py.process_info.ttypes import ConnectionStatus
 from pysandesh.gen_py.process_info.ttypes import ConnectionType as ConnType
 from pysandesh.gen_py.sandesh.ttypes import SandeshLevel
-from sandesh_common.vns import constants as vns_constants
+from sandesh_common.vns.constants import API_SERVER_KEYSPACE_NAME, \
+    CASSANDRA_DEFAULT_GC_GRACE_SECONDS
 import time
 from cfgm_common import jsonutils as json
 import utils
@@ -42,7 +43,7 @@ def merge_dict(orig_dict, new_dict):
 
 class VncCassandraClient(object):
     # Name to ID mapping keyspace + tables
-    _UUID_KEYSPACE_NAME = vns_constants.API_SERVER_KEYSPACE_NAME
+    _UUID_KEYSPACE_NAME = API_SERVER_KEYSPACE_NAME
 
     # TODO describe layout
     _OBJ_UUID_CF_NAME = 'obj_uuid_table'
@@ -110,8 +111,7 @@ class VncCassandraClient(object):
         return column_name[:9] == 'children:'
 
     def __init__(self, server_list, db_prefix, rw_keyspaces, ro_keyspaces,
-            logger, generate_url=None, reset_config=False, credential=None,
-            walk=True):
+            logger, generate_url=None, reset_config=False, credential=None):
         self._reset_config = reset_config
         self._cache_uuid_to_fq_name = {}
         if db_prefix:
@@ -137,13 +137,7 @@ class VncCassandraClient(object):
         self._cache_uuid_to_fq_name = {}
         self._obj_uuid_cf = self._cf_dict[self._OBJ_UUID_CF_NAME]
         self._obj_fq_name_cf = self._cf_dict[self._OBJ_FQ_NAME_CF_NAME]
-        if (((self._ro_keyspaces) and
-             (self._OBJ_SHARED_CF_NAME in self._ro_keyspaces[self._UUID_KEYSPACE_NAME])) or
-             ((self._rw_keyspaces) and
-             (self._OBJ_SHARED_CF_NAME in self._rw_keyspaces[self._UUID_KEYSPACE_NAME]))):
-            self._obj_shared_cf = self._cf_dict[self._OBJ_SHARED_CF_NAME]
-        if walk:
-            self.walk()
+        self._obj_shared_cf = self._cf_dict[self._OBJ_SHARED_CF_NAME]
     # end __init__
 
     def get_cf(self, cf_name):
@@ -491,7 +485,7 @@ class VncCassandraClient(object):
                 # TODO verify only EEXISTS
                 self._logger("Warning! " + str(e), level=SandeshLevel.SYS_WARN)
 
-        gc_grace_sec = vns_constants.CASSANDRA_DEFAULT_GC_GRACE_SECONDS
+        gc_grace_sec = CASSANDRA_DEFAULT_GC_GRACE_SECONDS
 
         for cf_name in cf_dict:
             create_cf_kwargs = cf_dict[cf_name].get('create_cf_args', {})
@@ -515,7 +509,7 @@ class VncCassandraClient(object):
                                           self._ro_keyspaces.items()):
             keyspace = '%s%s' %(self._db_prefix, ks)
             pool = pycassa.ConnectionPool(
-                keyspace, self._server_list, max_overflow=5, use_threadlocal=True,
+                keyspace, self._server_list, max_overflow=-1, use_threadlocal=True,
                 prefill=True, pool_size=20, pool_timeout=120,
                 max_retries=30, timeout=5, credentials=self._credential)
 
@@ -650,20 +644,6 @@ class VncCassandraClient(object):
         return (True, '')
     # end object_create
 
-    def object_raw_read(self, obj_uuids, prop_names):
-        obj_rows = self.multiget(self._OBJ_UUID_CF_NAME, obj_uuids,
-                                 ['prop:'+x for x in prop_names])
-
-        obj_dicts = []
-        for obj_uuid, columns in obj_rows.items():
-            obj_dict = {'uuid': obj_uuid}
-            for prop_name in columns:
-                # strip 'prop:' before sending result back
-                obj_dict[prop_name[5:]] = columns[prop_name]
-            obj_dicts.append(obj_dict)
-
-        return obj_dicts
-
     def object_read(self, obj_type, obj_uuids, field_names=None):
         if not obj_uuids:
             return (True, [])
@@ -726,8 +706,6 @@ class VncCassandraClient(object):
 
         results = []
         for obj_uuid, obj_cols in obj_rows.items():
-            if 'type' not in obj_cols or 'fq_name' not in obj_cols:
-                continue
             if obj_type != obj_cols.pop('type')[0]:
                 continue
             result = {}
@@ -737,12 +715,8 @@ class VncCassandraClient(object):
                 if self._is_parent(col_name):
                     # non config-root child
                     (_, _, parent_uuid) = col_name.split(':')
-                    try:
-                        parent_res_type = obj_cols['parent_type'][0]
-                        result['parent_type'] = parent_res_type
-                    except KeyError:
-                        # if parent_type is not in obj_cols, ignore
-                        pass
+                    parent_res_type = obj_cols['parent_type'][0]
+                    result['parent_type'] = parent_res_type
                     try:
                         result['parent_uuid'] = parent_uuid
                         result['parent_href'] = self._generate_url(parent_res_type,
@@ -1401,41 +1375,3 @@ class VncCassandraClient(object):
 
         result['%s_back_refs' % (back_ref_obj_type)].append(back_ref_info)
     # end _read_back_ref
-
-    def walk(self, fn=None):
-        type_to_object = {}
-        for obj_uuid, obj_col in self._obj_uuid_cf.get_range(
-                columns=['type', 'fq_name']):
-            try:
-                obj_type = json.loads(obj_col['type'])
-                obj_fq_name = json.loads(obj_col['fq_name'])
-                # prep cache to avoid n/w round-trip in db.read for ref
-                self.cache_uuid_to_fq_name_add(obj_uuid, obj_fq_name, obj_type)
-
-                try:
-                    type_to_object[obj_type].append(obj_uuid)
-                except KeyError:
-                    type_to_object[obj_type] = [obj_uuid]
-            except Exception as e:
-                self._logger('Error in db walk read %s' %(str(e)),
-                             level=SandeshLevel.SYS_ERR)
-                continue
-
-        if fn is None:
-            return []
-        walk_results = []
-        for obj_type, uuid_list in type_to_object.items():
-            try:
-                self._logger('DB walk: obj_type %s len %s'
-                             %(obj_type, len(uuid_list)),
-                             level=SandeshLevel.SYS_INFO)
-                result = fn(obj_type, uuid_list)
-                if result:
-                    walk_results.append(result)
-            except Exception as e:
-                self._logger('Error in db walk invoke %s' %(str(e)),
-                             level=SandeshLevel.SYS_ERR)
-                continue
-
-        return walk_results
-    # end walk

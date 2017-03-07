@@ -11,7 +11,6 @@
 #
 
 import sys
-import ConfigParser
 import argparse
 import json
 import datetime
@@ -46,7 +45,6 @@ class LogQuerier(object):
         try:
             if self.parse_args() != 0:
                 return
-
             if self._args.tail:
                 start_time = UTCTimestampUsec() - 10*pow(10,6)
                 while True:
@@ -76,13 +74,7 @@ class LogQuerier(object):
                 result = self.query()
                 if result == -1:
                     return
-                # Accumulate the result before processing it as the
-                # formatting of result can be cpu intensive and hence would
-                # affect the overall time taken to fetch the result from the
-                # analytics-api. Since the query result ttl is set to 5 min
-                # in redis, it is necessary to improve the read throughput.
-                result_list = self.read_result(result)
-                self.display(result_list)
+                self.display(result)
         except KeyboardInterrupt:
             return
 
@@ -114,40 +106,10 @@ class LogQuerier(object):
         defaults = {
             'analytics_api_ip': '127.0.0.1',
             'analytics_api_port': '8181',
-            'admin_user': 'admin',
-            'admin_password': 'contrail123',
-            'conf_file': '/etc/contrail/contrail-keystone-auth.conf',
         }
 
-        conf_parser = argparse.ArgumentParser(add_help=False)
-        conf_parser.add_argument("--admin-user", help="Name of admin user")
-        conf_parser.add_argument("--admin-password", help="Password of admin user")
-        conf_parser.add_argument("--conf-file", help="Configuration file")
-        args, remaining_argv = conf_parser.parse_known_args();
-
-        configfile = defaults['conf_file']
-        if args.conf_file:
-            configfile = args.conf_file
-
-        config = ConfigParser.SafeConfigParser()
-        config.read(configfile)
-        if 'KEYSTONE' in config.sections():
-            if args.admin_user == None:
-                args.admin_user = config.get('KEYSTONE', 'admin_user')
-            if args.admin_password == None:
-                args.admin_password = config.get('KEYSTONE','admin_password')
-
-        if args.admin_user == None:
-            args.admin_user = defaults['admin_user']
-        if args.admin_password == None:
-            args.admin_password = defaults['admin_password']
-
         parser = argparse.ArgumentParser(
-                  # Inherit options from config_parser
-                  parents=[conf_parser],
-                  # print script description with -h/--help
-                  description=__doc__,
-                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+            formatter_class=argparse.ArgumentDefaultsHelpFormatter)
         parser.set_defaults(**defaults)
         parser.add_argument("--analytics-api-ip", help="IP address of Analytics API Server")
         parser.add_argument("--analytics-api-port", help="Port of Analytics API Server")
@@ -196,9 +158,10 @@ class LogQuerier(object):
         parser.add_argument("--output-file", "-o", help="redirect output to file")
         parser.add_argument("--json", help="Dump output as json", action="store_true")
         parser.add_argument("--all", action="store_true", help=argparse.SUPPRESS)
-        self._args = parser.parse_args(remaining_argv)
-        self._args.admin_user = args.admin_user
-        self._args.admin_password = args.admin_password
+        parser.add_argument("--admin-user", help="Name of admin user", default="admin")
+        parser.add_argument("--admin-password", help="Password of admin user",
+            default="contrail123")
+        self._args = parser.parse_args()
         return 0
     # end parse_args
 
@@ -532,15 +495,6 @@ class LogQuerier(object):
         else:
             print log_str
     #end output
-
-    def read_result(self, result_gen):
-        if not result_gen:
-            return
-        result_list = []
-        for r in result_gen:
-            result_list.append(r)
-        return result_list
-    # end read_result
 
     def display(self, result):
         if result == [] or result is None:

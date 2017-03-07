@@ -1,11 +1,13 @@
 /*
  * Copyright (c) 2015 Juniper Networks, Inc. All rights reserved.
  */
+#include<WinSock2.h>
 
 #include <ctype.h>
 #include <stdio.h>
 #include <sstream>
 #include <fstream>
+#include<WinSock2.h> 
 #include <net/if.h>
 #include <boost/uuid/uuid.hpp>
 #include <boost/filesystem.hpp>
@@ -65,10 +67,6 @@ PortIpcHandler::PortIpcHandler(Agent *agent, const std::string &dir)
     interface_stale_cleaner_->set_callback(
         boost::bind(&InterfaceConfigStaleCleaner::OnInterfaceConfigStaleTimeout,
                     interface_stale_cleaner_.get(), _1));
-    uint32_t timeout_secs = agent->params()->stale_interface_cleanup_timeout();
-    //Set timeout in milliseconds
-    interface_stale_cleaner_->set_timeout(timeout_secs * 1000);
-
     fs::path ports_dir(ports_dir_);
     if (fs::exists(ports_dir)) {
         return;
@@ -77,6 +75,10 @@ PortIpcHandler::PortIpcHandler(Agent *agent, const std::string &dir)
         string err_msg = "Creating directory " + ports_dir_ + " failed";
         CONFIG_TRACE(PortInfo, err_msg.c_str());
     }
+
+    uint32_t timeout_secs = agent->params()->stale_interface_cleanup_timeout();
+    //Set timeout in milliseconds
+    interface_stale_cleaner_->set_timeout(timeout_secs * 1000);
 }
 
 PortIpcHandler::~PortIpcHandler() {
@@ -258,7 +260,7 @@ bool PortIpcHandler::CanAdd(PortIpcHandler::AddPortParams &r,
     if (r.vn_id.length() != 0) {
         r.vn_uuid = StringToUuid(r.vn_id);
     }
-    /* VM Project UUID is optional */
+    /* VM Project UUID is optional for CfgIntNameSpacePort */
     r.vm_project_uuid = nil_uuid();
     if (r.vm_project_id.length() != 0) {
         r.vm_project_uuid = StringToUuid(r.vm_project_id);
@@ -295,6 +297,11 @@ bool PortIpcHandler::CanAdd(PortIpcHandler::AddPortParams &r,
     if ((r.intf_type == CfgIntEntry::CfgIntVMPort) &&
         (r.vn_uuid == nil_uuid())) {
         resp_str += "invalid VN uuid, ";
+        err = true;
+    }
+    if ((r.intf_type == CfgIntEntry::CfgIntVMPort) &&
+        (r.vm_project_uuid == nil_uuid())) {
+        resp_str += "invalid VM project uuid, ";
         err = true;
     }
     if (!ValidateMac(r.mac_address)) {
@@ -426,7 +433,8 @@ bool PortIpcHandler::ValidateMac(const string &mac) const {
     return true;
 }
 
-bool PortIpcHandler::DeletePort(const string &uuid_str, string &err_str) {
+bool PortIpcHandler::DelPort(const std::string &uuid_str, std::string &err_str) {
+	
     uuid port_uuid = StringToUuid(uuid_str);
     if (port_uuid == nil_uuid()) {
         CONFIG_TRACE(PortInfo, "Invalid port uuid");
@@ -447,7 +455,7 @@ void PortIpcHandler::DeletePortInternal(const uuid &u, string &err_str) {
     req.oper = DBRequest::DB_ENTRY_DELETE;
     ctable->Enqueue(&req);
 
-    string uuid_str = UuidToString(u);
+    string uuid_str = UUIDToString(u);
     CONFIG_TRACE(DeletePortEnqueue, "Delete", uuid_str, version_);
 
     string file = ports_dir_ + "/" + uuid_str;
@@ -476,9 +484,9 @@ bool PortIpcHandler::GetPortInfo(const string &uuid_str, string &info) const {
         (new CfgIntKey(StringToUuid(uuid_str)));
     CfgIntEntry *entry = static_cast<CfgIntEntry *>(ctable->Find(key));
     if (entry != NULL) {
-        PortIpcHandler::AddPortParams req(UuidToString(entry->GetUuid()),
-            UuidToString(entry->GetVmUuid()), UuidToString(entry->GetVnUuid()),
-            UuidToString(entry->vm_project_uuid()), entry->vm_name(),
+        PortIpcHandler::AddPortParams req(UUIDToString(entry->GetUuid()),
+            UUIDToString(entry->GetVmUuid()), UUIDToString(entry->GetVnUuid()),
+            UUIDToString(entry->vm_project_uuid()), entry->vm_name(),
             entry->GetIfname(), entry->ip_addr().to_string(),
             entry->ip6_addr().to_string(), entry->GetMacAddr(),
             entry->port_type(), entry->tx_vlan_id(), entry->rx_vlan_id());
@@ -490,10 +498,12 @@ bool PortIpcHandler::GetPortInfo(const string &uuid_str, string &info) const {
 }
 
 bool PortIpcHandler::InterfaceExists(const std::string &name) const {
+#if 0 //WINDOWS-TEMP
     int indx  = if_nametoindex(name.c_str());
     if (indx == 0) {
         return false;
     }
+#endif
     return true;
 }
 

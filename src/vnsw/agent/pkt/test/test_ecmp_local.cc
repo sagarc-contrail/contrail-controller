@@ -146,69 +146,6 @@ TEST_F(EcmpTest, EcmpTest_1) {
     WAIT_FOR(1000, 1000, (get_flow_proto()->FlowCount() == 0));
 }
 
-//Send packet from ECMP of AAP and verify ECMP index and
-//RPF nexthop is set fine
-TEST_F(EcmpTest, EcmpTest_2) {
-    Ip4Address ip = Ip4Address::from_string("1.1.1.10");
-    std::string mac("0a:0b:0c:0d:0e:0f");
-
-    AddEcmpAap("vnet1", 1, ip, mac);
-    AddEcmpAap("vnet2", 2, ip, mac);
-    AddRemoteEcmpRoute("vrf1", "0.0.0.0", 0, "vn1", 4);
-    client->WaitForIdle();
-
-    TxIpPacket(VmPortGetId(1), "1.1.1.10", "2.1.1.1", 1);
-    client->WaitForIdle();
-
-    AgentRoute *rt = RouteGet("vrf1", Ip4Address::from_string("0.0.0.0"), 0);
-    InetUnicastRouteEntry *src_rt = static_cast<InetUnicastRouteEntry *>(
-            RouteGet("vrf1", Ip4Address::from_string("1.1.1.10"), 32));
-
-    FlowEntry *entry = FlowGet(VrfGet("vrf1")->vrf_id(),
-                               "1.1.1.10", "2.1.1.1", 1, 0, 0, GetFlowKeyNH(1));
-    EXPECT_TRUE(entry != NULL);
-    EXPECT_TRUE(entry->data().component_nh_idx !=
-                CompositeNH::kInvalidComponentNHIdx);
-    EXPECT_TRUE(entry->data().nh.get() == src_rt->GetLocalNextHop());
-
-    FlowEntry *rev_entry = entry->reverse_flow_entry();
-    EXPECT_TRUE(rev_entry->data().component_nh_idx !=
-                CompositeNH::kInvalidComponentNHIdx);
-    EXPECT_TRUE(rev_entry->data().nh.get() == rt->GetActiveNextHop());
-
-    DeleteRoute("vrf1", "0.0.0.0", 0, bgp_peer);
-    client->WaitForIdle();
-    sleep(1);
-    client->WaitForIdle();
-    WAIT_FOR(1000, 1000, (get_flow_proto()->FlowCount() == 0));
-}
-
-TEST_F(EcmpTest, EcmpTest_3) {
-    boost::scoped_ptr<InetInterfaceKey> key(new InetInterfaceKey("vhost0"));
-    const InetInterface *vhost = static_cast<InetInterface *>(
-            agent_->interface_table()->FindActiveEntry(key.get()));
-    const VmInterface *vmi = static_cast<const VmInterface *>(VmPortGet(1));
-
-    TxTcpPacket(vhost->id(), vhost->ip_addr().to_string().c_str(),
-                vmi->mdata_ip_addr().to_string().c_str(), 100, 100, false, 0);
-    client->WaitForIdle();
-
-    FlowEntry *entry = FlowGet(0, vhost->ip_addr().to_string().c_str(),
-                           vmi->mdata_ip_addr().to_string().c_str(), 
-                           IPPROTO_TCP, 100, 100, vhost->flow_key_nh()->id());
-    EXPECT_TRUE(entry != NULL);
-    EXPECT_TRUE(entry->data().component_nh_idx !=
-            CompositeNH::kInvalidComponentNHIdx);
-    
-    InetUnicastRouteEntry *rt = RouteGet("vrf1", vmi->primary_ip_addr(), 32);
-    const CompositeNH *cnh = 
-        dynamic_cast<const CompositeNH *>(rt->GetActiveNextHop());
-    EXPECT_TRUE(cnh->GetNH(entry->data().component_nh_idx) == 
-                vmi->l3_interface_nh_no_policy());
-   
-    client->WaitForIdle();
-}
-
 int main(int argc, char *argv[]) {
     GETUSERARGS();
     client = TestInit(init_file, ksync_init, true, true, true, 100*1000);

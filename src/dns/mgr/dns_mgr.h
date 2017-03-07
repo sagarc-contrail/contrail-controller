@@ -92,7 +92,6 @@ public:
         return (true);
     }
     PendingListMap GetDeportedPendingListMap() { return dp_pending_map_; }
-    void ClearDeportedPendingList() { dp_pending_map_.clear(); }
     void NotifyThrottledDnsRecords();
 
 private:

@@ -56,7 +56,6 @@ public:
     }
 
     void Init();
-    virtual void InitDone() {}
     virtual void RegisterDBClients();
     static AgentUveBase *GetInstance() {return singleton_;}
     uint8_t ExpectedConnections(uint8_t &num_c_nodes, uint8_t &num_d_servers);

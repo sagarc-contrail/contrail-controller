@@ -1,7 +1,12 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
+#ifdef _WINDOWS
 
+#include <boost/asio.hpp>
+#include <windows.h>
+
+#endif
 #include <sstream>
 #include <fstream>
 #include <uve/vrouter_uve_entry.h>
@@ -25,7 +30,8 @@ using namespace std;
 
 VrouterUveEntry::VrouterUveEntry(Agent *agent)
     : VrouterUveEntryBase(agent), bandwidth_count_(0), port_bitmap_(),
-      flow_info_() {
+      prev_flow_setup_rate_export_time_(0), prev_flow_created_(0),
+      prev_flow_aged_(0) {
     start_time_ = UTCTimestampUsec();
 }
 
@@ -34,6 +40,8 @@ VrouterUveEntry::~VrouterUveEntry() {
 
 bool VrouterUveEntry::SendVrouterMsg() {
     static bool first = true;
+    uint64_t max_add_rate = 0, min_add_rate = 0;
+    uint64_t max_del_rate = 0, min_del_rate = 0;
     VrouterStatsAgent stats;
 
     VrouterUveEntryBase::SendVrouterMsg();
@@ -124,16 +132,12 @@ bool VrouterUveEntry::SendVrouterMsg() {
         prev_stats_.set_flow_export_drops(flow_drops);
     }
 
-    map<string, PhyIfStats> phy_if_list;
-    map<string, PhyIfInfo> phy_if_info;
-    BuildPhysicalInterfaceList(phy_if_list, phy_if_info);
-    stats.set_raw_phy_if_stats(phy_if_list);
-
-    if (prev_stats_.get_phy_if_info() != phy_if_info) {
-        stats.set_phy_if_info(phy_if_info);
-        prev_stats_.set_phy_if_info(phy_if_info);
+    vector<AgentIfStats> phy_if_list;
+    BuildPhysicalInterfaceList(phy_if_list);
+    if (prev_stats_.get_phy_if_stats_list() != phy_if_list) {
+        stats.set_phy_if_stats_list(phy_if_list);
+        prev_stats_.set_phy_if_stats_list(phy_if_list);
     }
-
     bandwidth_count_++;
     if (first) {
         InitPrevStats();
@@ -200,26 +204,48 @@ bool VrouterUveEntry::SendVrouterMsg() {
     if (first) {
         stats.set_uptime(start_time_);
     }
-    AgentStats::FlowCounters &added =  agent_->stats()->added();
-    AgentStats::FlowCounters &deleted =  agent_->stats()->deleted();
-    uint32_t active_flows = agent_->pkt()->get_flow_proto()->FlowCount();
+    uint64_t cur_time = UTCTimestampUsec();
+    if (prev_flow_setup_rate_export_time_) {
+        uint64_t diff_time = cur_time - prev_flow_setup_rate_export_time_;
+        uint64_t created_flows = agent_->stats()->flow_created() -
+            prev_flow_created_;
+        uint64_t aged_flows = agent_->stats()->flow_aged() - prev_flow_aged_;
+        uint64_t diff_secs = diff_time / 1000000;
+        if (diff_secs) {
+            //Flow setup/delete rate are always sent
+            if (created_flows) {
+                max_add_rate = agent_->stats()->max_flow_adds_per_second();
+                min_add_rate = agent_->stats()->min_flow_adds_per_second();
+            }
+            if (aged_flows) {
+                max_del_rate = agent_->stats()->max_flow_deletes_per_second();
+                min_del_rate = agent_->stats()->min_flow_deletes_per_second();
+            }
 
-    VrouterFlowRate flow_rate;
-    bool built = uve->stats_manager()->BuildFlowRate(added, deleted, flow_info_,
-                                                     flow_rate);
-    if (built) {
-        flow_rate.set_active_flows(active_flows);
-        stats.set_flow_rate(flow_rate);
+            VrouterFlowRate flow_rate;
+            flow_rate.set_added_flows(created_flows);
+            flow_rate.set_max_flow_adds_per_second(max_add_rate);
+            flow_rate.set_min_flow_adds_per_second(min_add_rate);
+            flow_rate.set_deleted_flows(aged_flows);
+            flow_rate.set_max_flow_deletes_per_second(max_del_rate);
+            flow_rate.set_min_flow_deletes_per_second(min_del_rate);
+            flow_rate.set_active_flows(agent_->pkt()->get_flow_proto()->
+                                       FlowCount());
+            stats.set_flow_rate(flow_rate);
+            agent_->stats()->ResetFlowAddMinMaxStats(cur_time);
+            agent_->stats()->ResetFlowDelMinMaxStats(cur_time);
+            prev_flow_setup_rate_export_time_ = cur_time;
+            prev_flow_created_ = agent_->stats()->flow_created();
+            prev_flow_aged_ = agent_->stats()->flow_aged();
+        }
+    } else {
+        prev_flow_setup_rate_export_time_ = cur_time;
     }
 
     DerivedStatsMap ifmap_stats;
     FetchIFMapStats(ifmap_stats);
     stats.set_raw_ifmap_stats(ifmap_stats);
 
-    map<string, VrouterFlowRate> rate;
-    if (BuildPhysicalInterfaceFlowRate(&rate)) {
-        stats.set_phy_flow_rate(rate);
-    }
     DispatchVrouterStatsMsg(stats);
     first = false;
     return true;
@@ -277,31 +303,29 @@ uint64_t VrouterUveEntry::GetBandwidthUsage(StatsManager::InterfaceStats *s,
     return CalculateBandwitdh(bytes, s->speed, (mins * 60), util);
 }
 
-bool VrouterUveEntry::BuildPhysicalInterfaceList(map<string, PhyIfStats> &list,
-                                                 map<string, PhyIfInfo> info)
+bool VrouterUveEntry::BuildPhysicalInterfaceList(vector<AgentIfStats> &list)
                                                  const {
     bool changed = false;
     PhysicalInterfaceSet::const_iterator it = phy_intf_set_.begin();
     while (it != phy_intf_set_.end()) {
         const Interface *intf = *it;
-        ++it;
         AgentUveStats *uve = static_cast<AgentUveStats *>(agent_->uve());
         StatsManager::InterfaceStats *s =
               uve->stats_manager()->GetInterfaceStats(intf);
         if (s == NULL) {
             continue;
         }
-        PhyIfStats phy_stat_entry;
-        PhyIfInfo phy_if_info;
+        AgentIfStats phy_stat_entry;
+        phy_stat_entry.set_name(intf->name());
         phy_stat_entry.set_in_pkts(s->in_pkts);
         phy_stat_entry.set_in_bytes(s->in_bytes);
         phy_stat_entry.set_out_pkts(s->out_pkts);
         phy_stat_entry.set_out_bytes(s->out_bytes);
-        phy_if_info.set_speed(s->speed);
-        phy_if_info.set_duplexity(s->duplexity);
-        list.insert(make_pair(intf->name(), phy_stat_entry));
-        info.insert(make_pair(intf->name(), phy_if_info));
+        phy_stat_entry.set_speed(s->speed);
+        phy_stat_entry.set_duplexity(s->duplexity);
+        list.push_back(phy_stat_entry);
         changed = true;
+        ++it;
     }
     return changed;
 }
@@ -332,38 +356,6 @@ bool VrouterUveEntry::BuildPhysicalInterfaceBandwidth
     }
     return changed;
 }
-
-bool VrouterUveEntry::BuildPhysicalInterfaceFlowRate
-    (std::map<std::string, VrouterFlowRate> *rate) const {
-    bool changed = false;
-    PhysicalInterfaceSet::const_iterator it = phy_intf_set_.begin();
-    while (it != phy_intf_set_.end()) {
-        const Interface *intf = *it;
-        ++it;
-        AgentUveStats *uve = static_cast<AgentUveStats *>(agent_->uve());
-        StatsManager::InterfaceStats *s =
-              uve->stats_manager()->GetInterfaceStats(intf);
-        if (s == NULL) {
-            continue;
-        }
-        VrouterFlowRate flow_rate;
-        uint64_t created = 0, aged = 0;
-        uint32_t active_flows = 0;
-        agent_->pkt()->get_flow_proto()->InterfaceFlowCount(intf, &created,
-                                                            &aged,
-                                                            &active_flows);
-        bool built = uve->stats_manager()->BuildFlowRate(s->added, s->deleted,
-                                                         s->flow_info,
-                                                         flow_rate);
-        if (built) {
-            flow_rate.set_active_flows(active_flows);
-            rate->insert(make_pair(intf->name(), flow_rate));
-            changed = true;
-        }
-    }
-    return changed;
-}
-
 bool VrouterUveEntry::BuildPhysicalInterfaceBandwidth
     (map<string,uint64_t> &imp, map<string,uint64_t> &omp,
      uint8_t mins, double &in_avg_util,
@@ -378,7 +370,6 @@ bool VrouterUveEntry::BuildPhysicalInterfaceBandwidth
     PhysicalInterfaceSet::const_iterator it = phy_intf_set_.begin();
     while (it != phy_intf_set_.end()) {
         const Interface *intf = *it;
-        ++it;
         AgentUveStats *uve = static_cast<AgentUveStats *>(agent_->uve());
         StatsManager::InterfaceStats *s =
               uve->stats_manager()->GetInterfaceStats(intf);
@@ -394,6 +385,7 @@ bool VrouterUveEntry::BuildPhysicalInterfaceBandwidth
         changed = true;
         in_avg_util += in_util;
         out_avg_util += out_util;
+        ++it;
         num_intfs++;
     }
     if (num_intfs) {

@@ -576,10 +576,10 @@ void IntfCfgAddThrift(PortInfo *input, int id) {
     uint16_t tx_vlan_id = VmInterface::kInvalidVlanId;
     uint16_t rx_vlan_id = VmInterface::kInvalidVlanId;
     int16_t port_type = CfgIntEntry::CfgIntVMPort;
-    std::string port_uuid = UuidToString(MakeUuid(input[id].intf_id));
-    std::string instance_uuid = UuidToString(MakeUuid(input[id].vm_id));
-    std::string vn_uuid = UuidToString(MakeUuid(input[id].vn_id));
-    std::string vm_project_uuid = UuidToString(MakeUuid(kProjectUuid));
+    std::string port_uuid = UUIDToString(MakeUuid(input[id].intf_id));
+    std::string instance_uuid = UUIDToString(MakeUuid(input[id].vm_id));
+    std::string vn_uuid = UUIDToString(MakeUuid(input[id].vn_id));
+    std::string vm_project_uuid = UUIDToString(MakeUuid(kProjectUuid));
     //Set all parameters
     port_req->set_port_uuid(port_uuid);
     port_req->set_instance_uuid(instance_uuid);
@@ -2196,33 +2196,6 @@ void AddServiceInstanceIp(const char *name, int id, const char *addr, bool ecmp,
     AddNode("instance-ip", name, id, buf);
 }
 
-void AddSecondaryIp(const char *name, int id, const char *addr, bool ecmp,
-                    const char *tracking_ip) {
-    char buf[256];
-    char mode[256];
-
-    if (ecmp) {
-         sprintf(mode, "active-active");
-    } else {
-        sprintf(mode, "active-backup");
-    }
-
-    char tracking_ip_buf[256] = "0.0.0.0";
-    if (tracking_ip) {
-        sprintf(tracking_ip_buf, "%s", tracking_ip);
-    }
-
-    sprintf(buf, "<instance-ip-address>%s</instance-ip-address>"
-                 "<secondary>true</secondary>"
-                 "<instance-ip-mode>%s</instance-ip-mode>"
-                 "<secondary-ip-tracking-ip>"
-                 "    <ip-prefix>%s</ip-prefix>"
-                 "    <ip-prefix-len>32</ip-prefix-len>"
-                 "</secondary-ip-tracking-ip>", addr, mode,
-                 tracking_ip_buf);
-    AddNode("instance-ip", name, id, buf);
-}
-
 void DelInstanceIp(const char *name) {
     DelNode("instance-ip", name);
 }
@@ -2772,7 +2745,7 @@ void DeleteVmportEnv(struct PortInfo *input, int count, int del_vn, int acl_id,
         DelLink("virtual-network", vn_name, "virtual-machine-interface",
                 input[i].name);
         if (with_ip6) {
-            sprintf(instance_ip6, "instance6%d", input[i].intf_id);
+            sprintf(instance_ip6, "instance6%d", input[i].vm_id);
             DelLink("virtual-machine-interface", input[i].name, "instance-ip",
                     instance_ip6);
             DelInstanceIp(instance_ip6);
@@ -3452,8 +3425,7 @@ bool FlowGet(const string &vrf_name, const char *sip, const char *dip,
 
 bool FlowStatsMatch(const string &vrf_name, const char *sip,
                     const char *dip, uint8_t proto, uint16_t sport,
-                    uint16_t dport, uint64_t pkts, uint64_t bytes, int nh_id,
-                    uint32_t flow_handle) {
+                    uint16_t dport, uint64_t pkts, uint64_t bytes, int nh_id) {
     Agent *agent = Agent::GetInstance();
     VrfEntry *vrf = agent->vrf_table()->FindVrfFromName(vrf_name);
     EXPECT_TRUE(vrf != NULL);
@@ -3469,17 +3441,7 @@ bool FlowStatsMatch(const string &vrf_name, const char *sip,
     key.protocol = proto;
     key.family = key.src_addr.is_v4() ? Address::INET : Address::INET6;
 
-    FlowEntry *fe = NULL;
-    if (flow_handle != FlowEntry::kInvalidFlowHandle) {
-        FlowTable *table = agent->pkt()->get_flow_proto()->GetFlowTable(key,
-                                                                        flow_handle);
-        if (table == NULL) {
-            return NULL;
-        }
-        fe = table->Find(key);
-    } else {
-        fe = agent->pkt()->get_flow_proto()->Find(key, 0);
-    }
+    FlowEntry *fe = agent->pkt()->get_flow_proto()->Find(key, 0);
     EXPECT_TRUE(fe != NULL);
     if (fe == NULL) {
         return false;
@@ -4108,17 +4070,9 @@ bool VnMatch(VnListType &vn_list, std::string &vn) {
 void AddAddressVrfAssignAcl(const char *intf_name, int intf_id,
                             const char *sip, const char *dip, int proto,
                             int sport_start, int sport_end, int dport_start,
-                            int dport_end, const char *vrf,
-                            const char *ignore_acl, const char *svc_intf_type) {
-
-    if (svc_intf_type == NULL)
-        svc_intf_type = "management";
-
+                            int dport_end, const char *vrf, const char *ignore_acl) {
     char buf[3000];
     sprintf(buf,
-            "    <virtual-machine-interface-properties>\n"
-            "       <service-interface-type>%s</service-interface-type>\n"
-            "    </virtual-machine-interface-properties>\n"
             "    <vrf-assign-table>\n"
             "        <vrf-assign-rule>\n"
             "            <match-condition>\n"
@@ -4167,8 +4121,8 @@ void AddAddressVrfAssignAcl(const char *intf_name, int intf_id,
             "             <ignore-acl>%s</ignore-acl>\n"
             "         </vrf-assign-rule>\n"
             "    </vrf-assign-table>\n",
-        svc_intf_type, proto, sip, sport_start, sport_end, dip, dport_start,
-        dport_end, vrf, ignore_acl);
+        proto, sip, sport_start, sport_end, dip, dport_start, dport_end, vrf,
+        ignore_acl);
     AddNode("virtual-machine-interface", intf_name, intf_id, buf);
     client->WaitForIdle();
 }
@@ -4478,9 +4432,7 @@ void AddAap(std::string intf_name, int intf_id, Ip4Address ip,
     client->WaitForIdle();
 }
 
-void AddAapWithMacAndDisablePolicy(const std::string &intf_name, int intf_id,
-                                   Ip4Address ip, const std::string &mac,
-                                   bool disable_policy) {
+void AddEcmpAap(std::string intf_name, int intf_id, Ip4Address ip) {
     std::ostringstream buf;
     buf << "<virtual-machine-interface-allowed-address-pairs>";
     buf << "<allowed-address-pair>";
@@ -4488,33 +4440,8 @@ void AddAapWithMacAndDisablePolicy(const std::string &intf_name, int intf_id,
     buf << "<ip-prefix>" << ip.to_string() <<"</ip-prefix>";
     buf << "<ip-prefix-len>"<< 32 << "</ip-prefix-len>";
     buf << "</ip>";
-    buf << "<mac>" << mac << "</mac>";
-    buf << "<flag>" << "act-stby" << "</flag>";
-    buf << "</allowed-address-pair>";
-    buf << "</virtual-machine-interface-allowed-address-pairs>";
-    buf << "<virtual-machine-interface-disable-policy>";
-    if (disable_policy) {
-        buf << "true";
-    } else {
-        buf << "false";
-    }
-    buf << "</virtual-machine-interface-disable-policy>";
-    char cbuf[10000];
-    strcpy(cbuf, buf.str().c_str());
-    AddNode("virtual-machine-interface", intf_name.c_str(), intf_id, cbuf);
-    client->WaitForIdle();
-}
-
-void AddEcmpAap(std::string intf_name, int intf_id, Ip4Address ip,
-                const std::string &mac) {
-    std::ostringstream buf;
-    buf << "<virtual-machine-interface-allowed-address-pairs>";
-    buf << "<allowed-address-pair>";
-    buf << "<ip>";
-    buf << "<ip-prefix>" << ip.to_string() <<"</ip-prefix>";
-    buf << "<ip-prefix-len>"<< 32 << "</ip-prefix-len>";
-    buf << "</ip>";
-    buf << "<mac>" << mac << "</mac>";
+    buf << "<mac><mac-address>" << "00:00:00:00:00:00"
+        << "</mac-address></mac>";
     buf << "<address-mode>" << "active-active" << "</address-mode>";
     buf << "</allowed-address-pair>";
     buf << "</virtual-machine-interface-allowed-address-pairs>";

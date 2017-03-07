@@ -141,6 +141,9 @@ struct TrafficSeen : sc::state<TrafficSeen, PathPreferenceSM> {
         //Enqueue a route change
         if (state_machine->wait_for_traffic() == true) {
            state_machine->UpdateFlapTime();
+           if (state_machine->flap_count() == 0) {
+               state_machine->DecreaseRetryTimeout();
+           }
            uint32_t seq = state_machine->max_sequence();
            state_machine->set_wait_for_traffic(false);
            seq++;
@@ -204,14 +207,16 @@ struct ActiveActiveState : sc::state<ActiveActiveState, PathPreferenceSM> {
     ActiveActiveState(my_context ctx) : my_base(ctx) {
         PathPreferenceSM *state_machine = &context<PathPreferenceSM>();
         //Enqueue a route change
-        state_machine->set_wait_for_traffic(false);
-        uint32_t seq = 0;
-        state_machine->set_max_sequence(seq);
-        state_machine->set_sequence(seq);
-        state_machine->set_preference(PathPreference::HIGH);
-        state_machine->EnqueuePathChange();
-        state_machine->UpdateDependentRoute();
-        state_machine->Log("Ecmp path");
+        if (state_machine->preference() == PathPreference::LOW) {
+           state_machine->set_wait_for_traffic(false);
+           uint32_t seq = 0;
+           state_machine->set_max_sequence(seq);
+           state_machine->set_sequence(seq);
+           state_machine->set_preference(PathPreference::HIGH);
+           state_machine->EnqueuePathChange();
+           state_machine->UpdateDependentRoute();
+           state_machine->Log("Ecmp path");
+        }
     }
 
     sc::result react(const EvTrafficSeen &event) {
@@ -247,7 +252,6 @@ PathPreferenceSM::PathPreferenceSM(Agent *agent, const Peer *peer,
     path_preference_ = pref;
     initiate();
     process_event(EvStart());
-    backoff_timer_fired_time_ = UTCTimestampUsec();
 }
 
 PathPreferenceSM::~PathPreferenceSM() {
@@ -267,7 +271,6 @@ PathPreferenceSM::~PathPreferenceSM() {
 
 bool PathPreferenceSM::Retry() {
     flap_count_ = 0;
-    backoff_timer_fired_time_ = UTCTimestampUsec();
     process_event(EvWaitForTraffic());
     return false;
 }
@@ -305,37 +308,30 @@ void PathPreferenceSM::IncreaseRetryTimeout() {
     }
 }
 
-bool PathPreferenceSM::IsFlap() const {
-    uint64_t time_sec = (UTCTimestampUsec() -
-                         last_stable_high_priority_change_at_)/1000;
-    if (time_sec > kMinInterval) {
-        return false;
-    }
-    return true;
-}
-
 void PathPreferenceSM::DecreaseRetryTimeout() {
-    uint64_t time_sec =
-        (UTCTimestampUsec() - backoff_timer_fired_time_)/1000;
-    if (time_sec > kMinInterval) {
+    timeout_ = timeout_ / 2;
+    if (timeout_ < kMinInterval) {
         timeout_ = kMinInterval;
     }
 }
 
 void PathPreferenceSM::UpdateFlapTime() {
-    if (IsFlap()) {
+    uint64_t time_sec = (UTCTimestampUsec() - last_high_priority_change_at_)/1000;
+
+    //Update last flap time
+    last_high_priority_change_at_ = UTCTimestampUsec();
+    if (time_sec < timeout_ + kMinInterval) {
         flap_count_++;
     } else {
-        DecreaseRetryTimeout();
-        last_stable_high_priority_change_at_ = UTCTimestampUsec();
         flap_count_ = 0;
     }
 }
 
 bool PathPreferenceSM::IsPathFlapping() const {
-    if (flap_count_ >= kMaxFlapCount && IsFlap()) {
+    if (flap_count_ >= kMaxFlapCount) {
         return true;
     }
+
     return false;
 }
 
@@ -359,10 +355,8 @@ void PathPreferenceSM::Process() {
      uint32_t max_sequence = 0;
      const AgentPath *best_path = NULL;
 
-     const AgentPath *local_path =  rt_->FindPath(peer_);
      //Dont act on notification of derived routes
      if (is_dependent_rt_) {
-         path_preference_.set_ecmp(local_path->path_preference().ecmp());
          if (dependent_rt_.get()) {
              if (dependent_rt_->path_preference_.preference() ==
                      PathPreference::HIGH) {
@@ -374,18 +368,11 @@ void PathPreferenceSM::Process() {
          return;
      }
 
+     const AgentPath *local_path =  rt_->FindPath(peer_);
      if (local_path->path_preference().ecmp() == true) {
          path_preference_.set_ecmp(true);
          //If a path is ecmp, just set the priority to HIGH
          process_event(EvActiveActiveMode());
-         return;
-     }
-
-     if (path_preference_.ecmp() == true) {
-         path_preference_.set_ecmp(local_path->path_preference().ecmp());
-         //Route transition from ECMP to non ECMP,
-         //move to wait for traffic state
-         process_event(EvWaitForTraffic());
          return;
      }
 
@@ -408,6 +395,14 @@ void PathPreferenceSM::Process() {
      }
 
      if (!best_path) {
+         return;
+     }
+
+     if (ecmp() == true) {
+         path_preference_.set_ecmp(local_path->path_preference().ecmp());
+         //Route transition from ECMP to non ECMP,
+         //move to wait for traffic state
+         process_event(EvWaitForTraffic());
          return;
      }
 
@@ -435,7 +430,7 @@ void PathPreferenceSM::Log(std::string state) {
 
     PATH_PREFERENCE_TRACE(rt_->vrf()->GetName(), rt_->GetAddressString(),
                           preference(), sequence(), state, timeout(),
-                          dependent_ip_str, flap_count_);
+                          dependent_ip_str);
 }
 
 void PathPreferenceSM::EnqueuePathChange() {
@@ -661,7 +656,6 @@ PathPreferenceState::~PathPreferenceState() {
 //Given a VRF table the table listener id for given route
 bool
 PathPreferenceState::GetRouteListenerId(const VrfEntry* vrf,
-                                        const Agent::RouteTableType &table_type,
                                         DBTableBase::ListenerId &rt_id) const {
     if (vrf == NULL) {
         return false;
@@ -677,11 +671,11 @@ PathPreferenceState::GetRouteListenerId(const VrfEntry* vrf,
     }
 
     rt_id = DBTableBase::kInvalidId;
-    if (table_type == Agent::EVPN) {
+    if (rt_->GetTableType() == Agent::EVPN) {
         rt_id = vrf_state->evpn_rt_id_;
-    } else if (table_type == Agent::INET4_UNICAST) {
+    } else if (rt_->GetTableType() == Agent::INET4_UNICAST) {
         rt_id = vrf_state->uc_rt_id_;
-    } else if (table_type == Agent::INET6_UNICAST) {
+    } else if (rt_->GetTableType() == Agent::INET6_UNICAST) {
         rt_id = vrf_state->uc6_rt_id_;
     } else {
         return false;
@@ -710,14 +704,12 @@ PathPreferenceState::GetDependentPath(const AgentPath *path) const {
     }
 
     AgentRouteTable *table = NULL;
-    Agent::RouteTableType table_type = Agent::INET4_UNICAST;
     if (path->path_preference().dependent_ip().is_v4()) {
         table = static_cast<AgentRouteTable *>(
                                  vrf->GetInet4UnicastRouteTable());
     } else if (path->path_preference().dependent_ip().is_v6()) {
         table = static_cast<AgentRouteTable *>(
                                  vrf->GetInet6UnicastRouteTable());
-        table_type = Agent::INET6_UNICAST;
     }
     AgentRoute *rt = static_cast<AgentRoute *>(table->Find(&key));
     if (rt == NULL) {
@@ -725,7 +717,7 @@ PathPreferenceState::GetDependentPath(const AgentPath *path) const {
     }
 
     DBTableBase::ListenerId rt_id = DBTableBase::kInvalidId;
-    GetRouteListenerId(vrf, table_type, rt_id);
+    GetRouteListenerId(vrf, rt_id);
 
     PathPreferenceState *state = static_cast<PathPreferenceState *>(
             rt->GetState(table, rt_id));
@@ -735,8 +727,7 @@ PathPreferenceState::GetDependentPath(const AgentPath *path) const {
     return state->GetSM(path->peer());
 }
 
-bool PathPreferenceState::Process() {
-    bool should_resolve = false;
+void PathPreferenceState::Process() {
     PathPreferenceModule *path_module =
         agent_->oper_db()->route_preference_module();
     //Set all the path as not seen, eventually when path is seen
@@ -760,7 +751,6 @@ bool PathPreferenceState::Process() {
              continue;
          }
 
-         bool new_path_added = false;
          PathPreferenceSM *path_preference_sm;
          if (path_preference_peer_map_.find(path->peer()) ==
                  path_preference_peer_map_.end()) {
@@ -771,7 +761,6 @@ bool PathPreferenceState::Process() {
              path_preference_peer_map_.insert(
                 std::pair<const Peer *, PathPreferenceSM *>
                 (path->peer(), path_preference_sm));
-             new_path_added = true;
          } else {
              path_preference_sm =
                  path_preference_peer_map_.find(path->peer())->second;
@@ -797,8 +786,9 @@ bool PathPreferenceState::Process() {
          path_preference_sm->set_seen(true);
          path_preference_sm->Process();
 
-         if (dependent_rt == false && new_path_added) {
-             should_resolve = true;
+         if (dependent_rt == false) {
+             //Resolve path which may not be resolved yet
+             path_module->Resolve();
          }
      }
 
@@ -812,7 +802,6 @@ bool PathPreferenceState::Process() {
              path_preference_peer_map_.erase(prev_it);
          }
      }
-     return should_resolve;
 }
 
 PathPreferenceSM* PathPreferenceState::GetSM(const Peer *peer) {
@@ -900,14 +889,8 @@ void PathPreferenceRouteListener::Notify(DBTablePartBase *partition,
     if (!state) {
         state = new PathPreferenceState(agent_, rt);
     }
-    bool should_resolve = state->Process();
+    state->Process();
     e->SetState(rt_table_, id_, state);
-
-    if (should_resolve) {
-        PathPreferenceModule *path_module =
-                    agent_->oper_db()->route_preference_module();
-        path_module->Resolve();
-    }
 }
 
 PathPreferenceModule::PathPreferenceModule(Agent *agent):

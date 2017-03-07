@@ -2,8 +2,6 @@
 # Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
 #
 import gevent
-import gevent.monkey
-gevent.monkey.patch_all()
 import os
 import sys
 import socket
@@ -13,7 +11,9 @@ import logging
 import coverage
 import random
 import netaddr
-import tempfile
+
+import cgitb
+cgitb.enable(format='text')
 
 import fixtures
 import testtools
@@ -40,9 +40,6 @@ from vnc_api.gen.resource_test import *
 import cfgm_common
 from cfgm_common import vnc_plugin_base
 from cfgm_common import imid
-from cfgm_common import vnc_cgitb
-from cfgm_common import db_json_exim
-vnc_cgitb.enable(format='text')
 
 sys.path.append('../common/tests')
 from test_utils import *
@@ -659,112 +656,6 @@ class TestCrud(test_case.ApiServerTestCase):
             headers={'Content-type': 'application/json; charset="UTF-8"'},
             data=json.dumps(vn_body))
     # end test_create_using_rest_api
-
-    def test_user_defined_log_statistics_crud(self):
-        gsc_fixt = self.useFixture(GlobalSystemConfigTestFixtureGen(
-                                       self._vnc_lib))
-        gsc = gsc_fixt._obj
-        gsc.add_user_defined_log_statistics(UserDefinedLogStat('Test01',
-                    '.*[ab][0-9]s1.*'))
-        gsc.add_user_defined_log_statistics(UserDefinedLogStat('Test02',
-                    '127.0.0.1'))
-        self._vnc_lib.global_system_config_update(gsc)
-        gsc_uuid = self._vnc_lib.global_system_configs_list()[
-                                    'global-system-configs'][0]['uuid']
-        gsc = self._vnc_lib.global_system_config_read(id=gsc_uuid)
-        tst_trgt = ('Test01', 'Test02')
-        self.assertTrue(reduce(lambda x, y: x and y, map(
-                        lambda p: p.name in tst_trgt,
-                        gsc.user_defined_log_statistics.statlist),  True))
-    #end test_user_defined_log_statistics_crud
-
-    def test_user_defined_log_statistics_bad_add(self):
-        gsc_fixt = self.useFixture(GlobalSystemConfigTestFixtureGen(
-                                       self._vnc_lib))
-        gsc = gsc_fixt._obj
-        gsc.add_user_defined_log_statistics(UserDefinedLogStat('Test01',
-                    '.*[ab][0-9]s1.*'))
-        # import pdb; pdb.set_trace()
-        # bad regex
-        gsc.add_user_defined_log_statistics(UserDefinedLogStat('Test03',
-                    '*foo'))
-        with ExpectedException(BadRequest) as e:
-            self._vnc_lib.global_system_config_update(gsc)
-    #end test_user_defined_log_statistics_bad_add
-
-    def test_user_defined_log_statistics_set(self):
-        gsc_fixt = self.useFixture(GlobalSystemConfigTestFixtureGen(
-                                       self._vnc_lib))
-        gsc = gsc_fixt._obj
-        sl = UserDefinedLogStatList()
-        sl.add_statlist(UserDefinedLogStat('Test01', '.*[ab][0-9]s1.*'))
-        sl.add_statlist(UserDefinedLogStat('Test02', '127.0.0.1'))
-        gsc.set_user_defined_log_statistics(sl)
-
-        self._vnc_lib.global_system_config_update(gsc)
-        gsc_uuid = self._vnc_lib.global_system_configs_list()[
-                                    'global-system-configs'][0]['uuid']
-        gsc = self._vnc_lib.global_system_config_read(id=gsc_uuid)
-        tst_trgt = ('Test01', 'Test02')
-        self.assertTrue(reduce(lambda x, y: x and y, map(
-                        lambda p: p.name in tst_trgt,
-                        gsc.user_defined_log_statistics.statlist),  True))
-    #end test_user_defined_log_statistics_set
-
-    def test_user_defined_log_statistics_bad_set(self):
-        gsc_fixt = self.useFixture(GlobalSystemConfigTestFixtureGen(
-                                       self._vnc_lib))
-        gsc = gsc_fixt._obj
-        sl = UserDefinedLogStatList()
-        sl.add_statlist(UserDefinedLogStat('Test01', '.*[ab][0-9]s1.*'))
-        sl.add_statlist(UserDefinedLogStat('Test02', '127.0.0.1'))
-        sl.add_statlist(UserDefinedLogStat('Test03', '*127.0.0.1'))
-        gsc.set_user_defined_log_statistics(sl)
-
-        with ExpectedException(BadRequest) as e:
-            self._vnc_lib.global_system_config_update(gsc)
-    #end test_user_defined_log_statistics_bad_set
-
-    def test_vlan_tag_on_sub_intefaces(self):
-        vn = VirtualNetwork('vn-%s' %(self.id()))
-        self._vnc_lib.virtual_network_create(vn)
-
-        id_perms = IdPermsType(enable=True)
-        vmi_prop = VirtualMachineInterfacePropertiesType(sub_interface_vlan_tag=256)
-        port_obj = VirtualMachineInterface(
-                   str(uuid.uuid4()), parent_obj=Project(),
-                   virtual_machine_interface_properties=vmi_prop,
-                   id_perms=id_perms)
-        port_obj.uuid = port_obj.name
-        port_obj.set_virtual_network(vn)
-
-        #create port with sub_interface_vlan_tag specified
-        port_id = self._vnc_lib.virtual_machine_interface_create(port_obj)
-
-        vmi_prop.sub_interface_vlan_tag = 128
-        port_obj.set_virtual_machine_interface_properties(vmi_prop)
-        #updating sub_interface_vlan_tag of the port to a new value should fail
-        #as vrouter doesn't support it.
-        with ExpectedException(BadRequest) as e:
-            self._vnc_lib.virtual_machine_interface_update(port_obj)
-        # end test_vlan_tag_on_sub_interfaces
-
-    def test_service_interface_type_value(self):
-        vn = VirtualNetwork('vn-%s' %(self.id()))
-        self._vnc_lib.virtual_network_create(vn)
-
-        vmi_prop = VirtualMachineInterfacePropertiesType(service_interface_type='Left')
-        port_obj = VirtualMachineInterface(
-                   str(uuid.uuid4()), parent_obj=Project(),
-                   virtual_machine_interface_properties=vmi_prop)
-        port_obj.uuid = port_obj.name
-        port_obj.set_virtual_network(vn)
-
-        #creation of port should fail as the valid values for
-        #service_interface_type are: management|left|right|other[0-9]*
-        with ExpectedException(BadRequest) as e:
-            port_id = self._vnc_lib.virtual_machine_interface_create(port_obj)
-       #end test_service_interface_type_value
 # end class TestCrud
 
 
@@ -1636,11 +1527,7 @@ class TestVncCfgApiServer(test_case.ApiServerTestCase):
         vn2_obj = VirtualNetwork(
             name, display_name=name, id_perms=id_perms,
             is_shared=True, router_external=False)
-        def fake_admin_request(orig_method, *args, **kwargs):
-            return True
-        with test_common.patch(self._api_server,
-            'is_admin_request', fake_admin_request):
-            self._vnc_lib.virtual_network_create(vn2_obj)
+        self._vnc_lib.virtual_network_create(vn2_obj)
 
         listen_ip = self._api_server_ip
         listen_port = self._api_server._args.listen_port
@@ -1649,13 +1536,18 @@ class TestVncCfgApiServer(test_case.ApiServerTestCase):
         url = 'http://%s:%s/virtual-networks?%s' %(
             listen_ip, listen_port, q_params)
 
-        resp = requests.get(url)
-        self.assertEqual(resp.status_code, 200)
-        read_vn_dicts = json.loads(resp.text)['virtual-networks']
-        self.assertEqual(len(read_vn_dicts), 1)
-        self.assertEqual(read_vn_dicts[0]['uuid'], vn1_obj.uuid)
-        self.assertEqual(read_vn_dicts[0]['is_shared'], True)
-        self.assertEqual(read_vn_dicts[0]['router_external'], False)
+        def fake_non_admin_request(orig_method, *args, **kwargs):
+            return False
+        with test_common.patch(self._api_server,
+            'is_admin_request', fake_non_admin_request):
+            resp = requests.get(url)
+            self.assertEqual(resp.status_code, 200)
+            read_vn_dicts = json.loads(resp.text)['virtual-networks']
+            self.assertEqual(len(read_vn_dicts), 1)
+            self.assertEqual(read_vn_dicts[0]['uuid'], vn1_obj.uuid)
+            self.assertEqual(read_vn_dicts[0]['is_shared'], True)
+            self.assertEqual(read_vn_dicts[0]['router_external'], False)
+
     # end test_list_for_coverage
 
     def test_create_with_wrong_type(self):
@@ -2148,36 +2040,6 @@ class TestVncCfgApiServer(test_case.ApiServerTestCase):
         qc = self._vnc_lib.qos_config_read(fq_name=qc.get_fq_name())
         self.assertEqual(len(qc.get_global_system_config_refs()), 1)
 
-    def test_cert_bundle_refresh(self):
-        bundle_dir = tempfile.mkdtemp(self.id())
-        try:
-            with open(bundle_dir+'cert', 'w') as f:
-                f.write("CERT")
-            with open(bundle_dir+'ca', 'w') as f:
-                f.write("CA")
-            with open(bundle_dir+'key', 'w') as f:
-                f.write("KEY")
-            cfgm_common.utils.getCertKeyCaBundle(bundle_dir+'pem',
-                [bundle_dir+x for x in ['cert', 'ca', 'key']])
-            with open(bundle_dir+'pem', 'r') as f:
-                self.assertEqual(f.readlines()[0], 'CERTCAKEY')
-
-            # sleep so mods to cert/ca/key appear as different epoch
-            gevent.sleep(0.1)
-
-            with open(bundle_dir+'cert', 'w') as f:
-                f.write("CERTNEW")
-            with open(bundle_dir+'ca', 'w') as f:
-                f.write("CANEW")
-            with open(bundle_dir+'key', 'w') as f:
-                f.write("KEYNEW")
-            cfgm_common.utils.getCertKeyCaBundle(bundle_dir+'pem',
-                [bundle_dir+x for x in ['cert', 'ca', 'key']])
-            with open(bundle_dir+'pem', 'r') as f:
-                self.assertEqual(f.readlines()[0], 'CERTNEWCANEWKEYNEW')
-        finally:
-            os.removedirs(bundle_dir)
-    # end test_cert_bundle_refresh
 # end class TestVncCfgApiServer
 
 
@@ -3467,7 +3329,8 @@ class TestDBAudit(test_case.ApiServerTestCase):
                 new_columns=wrong_col_val_ts):
                 errors = db_checker.check_subnet_addr_alloc()
                 error_types = [type(x) for x in errors]
-                self.assertEqual(len(error_types),0)
+                self.assertIn(db_manage.ZkVNExtraError, error_types)
+                self.assertIn(db_manage.ZkSubnetExtraError, error_types)
     # test_checker_zk_vn_extra
 
     def test_checker_zk_vn_missing(self):
@@ -3506,7 +3369,6 @@ class TestDBAudit(test_case.ApiServerTestCase):
     # test_checker_zk_ip_extra
 
     def test_checker_zk_ip_missing(self):
-        self.skipTest("Skipping test_checker_zk_ip_missing")
         vn_obj, _ = self._create_vn_subnet_ipam(self.id())
         with self.audit_mocks():
             from vnc_cfg_api_server import db_manage
@@ -3527,6 +3389,22 @@ class TestDBAudit(test_case.ApiServerTestCase):
                 self.assertIn(db_manage.ZkIpMissingError, error_types)
         pass
     # test_checker_zk_ip_missing
+
+    def test_checker_zk_reserved_ip_missing(self):
+        vn_obj, _ = self._create_vn_subnet_ipam(self.id())
+        with self.audit_mocks():
+            from vnc_cfg_api_server import db_manage
+            db_checker = db_manage.DatabaseChecker(
+                '--ifmap-credentials a:b')
+            # mock absence of gateway ip in zk
+            ip_str = "%(#)010d" % {'#': int(netaddr.IPAddress('1.1.1.14'))}
+            with db_checker._zk_client.patch_path(
+                '%s/%s:1.1.1.0/28/%s' %(db_checker.BASE_SUBNET_ZK_PATH,
+                                  vn_obj.get_fq_name_str(), ip_str)):
+                errors = db_checker.check_subnet_addr_alloc()
+                error_types = [type(x) for x in errors]
+                self.assertIn(db_manage.ZkIpReserveError, error_types)
+    # test_checker_zk_reserved_ip_missing
 
     def test_checker_zk_route_target_extra(self):
         pass # move to schema transformer test
@@ -3617,95 +3495,6 @@ class TestDBAudit(test_case.ApiServerTestCase):
         pass
     # end test_heal_useragent_subnet_uuid
 # end class TestDBAudit
-
-
-class TestDbJsonExim(test_case.ApiServerTestCase):
-    @classmethod
-    def setUpClass(cls, *args, **kwargs):
-        cls.console_handler = logging.StreamHandler()
-        cls.console_handler.setLevel(logging.DEBUG)
-        logger.addHandler(cls.console_handler)
-        super(TestDbJsonExim, cls).setUpClass(*args, **kwargs)
-    # end setUpClass
-
-    @classmethod
-    def tearDownClass(cls, *args, **kwargs):
-        logger.removeHandler(cls.console_handler)
-        super(TestDbJsonExim, cls).tearDownClass(*args, **kwargs)
-    # end tearDownClass
-
-    def test_db_exim_args(self):
-        with ExpectedException(db_json_exim.InvalidArguments,
-            'Both --import-from and --export-to cannot be specified'):
-            db_json_exim.DatabaseExim("--import-from foo --export-to bar")
-    # end test_db_exim_args
-
-    def test_db_export(self):
-        with tempfile.NamedTemporaryFile() as export_dump:
-            patch_ks = test_common.FakeSystemManager.patch_keyspace
-            with patch_ks('to_bgp_keyspace', {}), \
-                 patch_ks('svc_monitor_keyspace', {}), \
-                 patch_ks('DISCOVERY_SERVER', {}):
-                vn_obj = self._create_test_object()
-                db_json_exim.DatabaseExim('--export-to %s' %(
-                    export_dump.name)).db_export()
-                dump = json.loads(export_dump.readlines()[0])
-                dump_cassandra = dump['cassandra']
-                dump_zk = json.loads(dump['zookeeper'])
-                uuid_table = dump_cassandra['config_db_uuid']['obj_uuid_table']
-                self.assertEqual(uuid_table[vn_obj.uuid]['fq_name'][0],
-                    json.dumps(vn_obj.get_fq_name()))
-                zk_node = [node for node in dump_zk
-                    if node[0] == '/fq-name-to-uuid/virtual_network:%s/' %(
-                        vn_obj.get_fq_name_str())]
-                self.assertEqual(len(zk_node), 1)
-                self.assertEqual(zk_node[0][1][0], vn_obj.uuid)
-    # end test_db_export
-
-    def test_db_export_and_import(self):
-        with tempfile.NamedTemporaryFile() as dump_f:
-            patch_ks = test_common.FakeSystemManager.patch_keyspace
-            with patch_ks('to_bgp_keyspace', {}), \
-                 patch_ks('svc_monitor_keyspace', {}), \
-                 patch_ks('DISCOVERY_SERVER', {}):
-                vn_obj = self._create_test_object()
-                db_json_exim.DatabaseExim('--export-to %s' %(
-                    dump_f.name)).db_export()
-                with ExpectedException(db_json_exim.CassandraNotEmptyError,
-                    'obj_uuid_table has entries'):
-                    db_json_exim.DatabaseExim('--import-from %s' %(
-                        dump_f.name)).db_import()
-
-                uuid_cf = test_common.CassandraCFs.get_cf(
-                    'config_db_uuid', 'obj_uuid_table')
-                fq_name_cf = test_common.CassandraCFs.get_cf(
-                    'config_db_uuid', 'obj_fq_name_table')
-                with uuid_cf.patch_cf({}), fq_name_cf.patch_cf({}):
-                    with ExpectedException(
-                         db_json_exim.ZookeeperNotEmptyError):
-                        db_json_exim.DatabaseExim('--import-from %s' %(
-                            dump_f.name)).db_import()
-
-                exim_obj = db_json_exim.DatabaseExim('--import-from %s' %(
-                               dump_f.name))
-                with uuid_cf.patch_cf({}), fq_name_cf.patch_cf({}), \
-                    exim_obj._zookeeper.patch_path(
-                        '/', recursive=True):
-                    exim_obj.db_import()
-                    dump = json.loads(dump_f.readlines()[0])
-                    dump_cassandra = dump['cassandra']
-                    dump_zk = json.loads(dump['zookeeper'])
-                    uuid_table = dump_cassandra['config_db_uuid']['obj_uuid_table']
-                    self.assertEqual(uuid_table[vn_obj.uuid]['fq_name'][0],
-                        json.dumps(vn_obj.get_fq_name()))
-                    zk_node = [node for node in dump_zk
-                        if node[0] == '/fq-name-to-uuid/virtual_network:%s/' %(
-                            vn_obj.get_fq_name_str())]
-                    self.assertEqual(len(zk_node), 1)
-                self.assertEqual(zk_node[0][1][0], vn_obj.uuid)
-    # end test_db_export_and_import
-# end class TestDbJsonExim
-
 
 if __name__ == '__main__':
     ch = logging.StreamHandler()

@@ -369,8 +369,7 @@ FlowEntry* FlowGet(int vrf_id, std::string sip, std::string dip, uint8_t proto,
                    uint16_t sport, uint16_t dport, int nh_id);
 bool FlowStatsMatch(const string &vrf_name, const char *sip, const char *dip,
                     uint8_t proto, uint16_t sport, uint16_t dport,
-                    uint64_t pkts, uint64_t bytes, int nh_id,
-                    uint32_t flow_handle = FlowEntry::kInvalidFlowHandle);
+                    uint64_t pkts, uint64_t bytes, int nh_id);
 bool FindFlow(const string &vrf_name, const char *sip, const char *dip,
               uint8_t proto, uint16_t sport, uint16_t dport, bool nat,
               const string &nat_vrf_name, const char *nat_sip,
@@ -402,8 +401,6 @@ bool VlanNhFind(int id, uint16_t tag);
 void AddInstanceIp(const char *name, int id, const char* addr);
 void AddServiceInstanceIp(const char *name, int id, const char* addr, bool ecmp,
                           const char *tracking_ip);
-void AddSecondaryIp(const char *name, int id, const char* addr,
-                    bool ecmp, const char *tracking_ip);
 void AddSubnetType(const char *name, int id, const char* addr, uint8_t);
 void AddActiveActiveInstanceIp(const char *name, int id, const char* addr);
 void AddHealthCheckServiceInstanceIp(const char *name, int id,
@@ -445,16 +442,12 @@ void AddInterfaceRouteTableV6(const char *name, int id, TestIp6Prefix *addr,
 void ShutdownAgentController(Agent *agent);
 void AddAap(std::string intf_name, int intf_id,
             std::vector<Ip4Address> aap_list);
-void AddEcmpAap(std::string intf_name, int intf_id, Ip4Address ip,
-                const std::string &mac);
+void AddEcmpAap(std::string intf_name, int intf_id, Ip4Address ip);
 void AddAap(std::string intf_name, int intf_id, Ip4Address ip,
             const std::string &mac);
 void AddAapWithDisablePolicy(std::string intf_name, int intf_id,
                              std::vector<Ip4Address> aap_list,
                              bool disable_policy);
-void AddAapWithMacAndDisablePolicy(const std::string &intf_name, int intf_id,
-                                   Ip4Address ip, const std::string &mac,
-                                   bool disable_policy);
 
 class XmppChannelMock : public XmppChannel {
 public:
@@ -571,8 +564,7 @@ void SendBgpServiceConfig(const std::string &ip,
 void AddAddressVrfAssignAcl(const char *intf_name, int intf_id,
                             const char *sip, const char *dip, int proto,
                             int sport_start, int sport_end, int dport_start,
-                            int dport_end, const char *vrf, const char *ignore_acl,
-                            const char *svc_intf_type = NULL);
+                            int dport_end, const char *vrf, const char *ignore_acl);
 void SendBgpServiceConfig(const std::string &ip,
                           uint32_t source_port,
                           uint32_t id,

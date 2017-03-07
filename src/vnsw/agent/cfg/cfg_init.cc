@@ -1,6 +1,8 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
+#include <boost/asio.hpp>
+#include <windows.h>
 #include <cmn/agent_cmn.h>
 
 #include <boost/property_tree/xml_parser.hpp>
@@ -190,10 +192,6 @@ void AgentConfig::RegisterDBClients(DB *db) {
                                                        "physical-router")));
     assert(cfg_physical_device_table_);
 
-    cfg_health_check_table_ = (static_cast<IFMapAgentTable *>
-                                (IFMapTable::FindTable(agent_->db(),
-                                                       "service-health-check")));
-    assert(cfg_health_check_table_);
 
     cfg_qos_table_ = (static_cast<IFMapAgentTable *>
                       (IFMapTable::FindTable(agent_->db(),

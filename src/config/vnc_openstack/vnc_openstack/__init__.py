@@ -13,7 +13,6 @@ from cStringIO import StringIO
 import bottle
 import logging
 import logging.handlers
-from datetime import datetime
 import Queue
 import ConfigParser
 import keystoneclient.v2_0.client as keystone
@@ -28,15 +27,11 @@ except ImportError:
 from cfgm_common.utils import cgitb_hook
 from pysandesh.sandesh_base import *
 from pysandesh.sandesh_logger import *
-from pysandesh.connection_info import ConnectionState
-from pysandesh.gen_py.process_info.ttypes import ConnectionStatus
-from pysandesh.gen_py.process_info.ttypes import ConnectionType as ConnType
 from vnc_api import vnc_api
 from vnc_api.gen.resource_xsd import *
 from vnc_api.gen.resource_common import *
 
 import neutron_plugin_interface as npi
-from context import use_context
 
 Q_CREATE = 'create'
 Q_DELETE = 'delete'
@@ -82,12 +77,10 @@ def fill_keystone_opts(obj, conf_sections):
 
     obj._kscertbundle=''
     obj._use_certs=False
-    if obj._certfile:
-        certs = [obj._certfile]
-        if obj._keyfile and obj._cafile:
-            certs=[obj._certfile,obj._keyfile,obj._cafile]
-        obj._kscertbundle=cfgmutils.getCertKeyCaBundle(_DEFAULT_KS_CERT_BUNDLE,certs)
-        obj._use_certs=True
+    if obj._certfile and obj._keyfile and obj._cafile:
+       certs=[obj._certfile,obj._keyfile,obj._cafile]
+       obj._kscertbundle=cfgmutils.getCertKeyCaBundle(_DEFAULT_KS_CERT_BUNDLE,certs)
+       obj._use_certs=True
 
     try:
         obj._auth_url = conf_sections.get('KEYSTONE', 'auth_url')
@@ -109,7 +102,7 @@ def fill_keystone_opts(obj, conf_sections):
                                             'keystone_resync_interval_secs')
     except ConfigParser.NoOptionError:
         resync_interval = '60'
-    obj._resync_interval_secs = float(resync_interval)
+    obj._resync_interval_secs = int(resync_interval)
 
     try:
         # Number of workers used to process keystone project resyncing
@@ -118,19 +111,6 @@ def fill_keystone_opts(obj, conf_sections):
     except ConfigParser.NoOptionError:
         resync_workers = '10'
     obj._resync_number_workers = int(resync_workers)
-
-    try:
-        # If new project with same name as an orphan project 
-        # (gone in keystone, present in # contrail with resources within)
-        # is encountered,
-        # a. proceed with unique ified name (new_unique_fqn)
-        # b. refuse to sync (new_fail)
-        # c. cascade delete (TODO)
-        resync_mode = conf_sections.get('DEFAULTS',
-                                        'keystone_resync_stale_mode')
-    except ConfigParser.NoOptionError:
-        resync_mode = 'new_unique_fqn'
-    obj._resync_stale_mode = resync_mode
 
     try:
         # Get the domain_id for keystone v3
@@ -228,6 +208,7 @@ class OpenstackDriver(vnc_plugin_base.Resync):
         fill_keystone_opts(self, conf_sections)
 
         if 'v3' in self._auth_url.split('/')[-1]:
+            self._get_keystone_conn = self._ksv3_get_conn
             self._ks_domains_list = self._ksv3_domains_list
             self._ks_domain_get = self._ksv3_domain_get
             self._ks_projects_list = self._ksv3_projects_list
@@ -237,6 +218,7 @@ class OpenstackDriver(vnc_plugin_base.Resync):
             self._del_project_from_vnc = self._ksv3_del_project_from_vnc
             self._vnc_default_domain_id = None
         else:
+            self._get_keystone_conn = self._ksv2_get_conn
             self._ks_domains_list = None
             self._ks_domain_get = None
             self._ks_projects_list = self._ksv2_projects_list
@@ -246,9 +228,6 @@ class OpenstackDriver(vnc_plugin_base.Resync):
             self._del_project_from_vnc = self._ksv2_del_project_from_vnc
 
         self._ks = None
-        ConnectionState.update(conn_type=ConnType.OTHER,
-            name='Keystone', status=ConnectionStatus.INIT, message='',
-            server_addrs=[self._auth_url])
         self._vnc_lib = None
 
         # resync failures, don't retry forever
@@ -297,56 +276,38 @@ class OpenstackDriver(vnc_plugin_base.Resync):
             tenant_name=self._admin_tenant)
     # end _get_vnc_conn
 
-    def _get_keystone_conn(self):
-        if self._ks:
-            return
-
-        if 'v3' in self._auth_url.split('/')[-1]:
-            self._ks = self._ksv3_get_conn()
-            if self._endpoint_type and self._ks.service_catalog:
-                self._ks.management_url = \
-                    self._ks.service_catalog.get_urls(
-                        service_type='identity',
-                        endpoint_type=self._endpoint_type)[0]
-        else:
-            self._ks = self._ksv2_get_conn()
-
-        ConnectionState.update(conn_type=ConnType.OTHER,
-            name='Keystone', status=ConnectionStatus.UP, message='',
-            server_addrs=[self._auth_url])
-    # end _get_keystone_conn
-
     def _ksv2_get_conn(self):
-        if self._admin_token:
-            if self._insecure:
-                   return keystone.Client(token=self._admin_token,
-                                          endpoint=self._auth_url,
-                                          insecure=self._insecure)
-            elif not self._insecure and self._use_certs:
-                   return keystone.Client(token=self._admin_token,
-                                          endpoint=self._auth_url,
-                                          cacert=self._kscertbundle)
+        if not self._ks:
+            if self._admin_token:
+                if self._insecure:
+                       self._ks = keystone.Client(token=self._admin_token,
+                                                  endpoint=self._auth_url,
+                                                  insecure=self._insecure)
+                elif not self._insecure and self._use_certs:
+                       self._ks =  keystone.Client(token=self._admin_token,
+                                                   endpoint=self._auth_url,
+                                                   cacert=self._kscertbundle)
+                else:
+                       self._ks =  keystone.Client(token=self._admin_token,
+                                                   endpoint=self._auth_url)
             else:
-                   return keystone.Client(token=self._admin_token,
-                                          endpoint=self._auth_url)
-        else:
-            if self._insecure:
-                 return keystone.Client(username=self._auth_user,
-                                        password=self._auth_passwd,
-                                        tenant_name=self._admin_tenant,
-                                        auth_url=self._auth_url,
-                                        insecure=self._insecure)
-            elif not self._insecure and self._use_certs:
-                 return keystone.Client(username=self._auth_user,
-                                        password=self._auth_passwd,
-                                        tenant_name=self._admin_tenant,
-                                        auth_url=self._auth_url,
-                                        cacert=self._kscertbundle)
-            else:
-                 return keystone.Client(username=self._auth_user,
-                                        password=self._auth_passwd,
-                                        tenant_name=self._admin_tenant,
-                                        auth_url=self._auth_url)
+                if self._insecure:
+                     self._ks = keystone.Client(username=self._auth_user,
+                                              password=self._auth_passwd,
+                                              tenant_name=self._admin_tenant,
+                                              auth_url=self._auth_url,
+                                              insecure=self._insecure)
+                elif not self._insecure and self._use_certs:
+                     self._ks =  keystone.Client(username=self._auth_user,
+                                                password=self._auth_passwd,
+                                                tenant_name=self._admin_tenant,
+                                                auth_url=self._auth_url,
+                                                cacert=self._kscertbundle)
+                else:
+                     self._ks =  keystone.Client(username=self._auth_user,
+                                                password=self._auth_passwd,
+                                                tenant_name=self._admin_tenant,
+                                                auth_url=self._auth_url)
     # end _ksv2_get_conn
 
     def _ksv2_projects_list(self):
@@ -361,12 +322,7 @@ class OpenstackDriver(vnc_plugin_base.Resync):
         try:
             return {'name': self._ks.tenants.get(id).name}
         except Exception as e:
-            if self._ks is not None:
-                self._ks = None
-                ConnectionState.update(conn_type=ConnType.OTHER,
-                    name='Keystone', status=ConnectionStatus.DOWN,
-                    message='Error: %s at UTC %s' %(e, datetime.utcnow()),
-                    server_addrs=[self._auth_url])
+            self._ks = None
             self._get_keystone_conn()
             return {'name': self._ks.tenants.get(id).name}
     # end _ksv2_project_get
@@ -376,7 +332,6 @@ class OpenstackDriver(vnc_plugin_base.Resync):
         self._get_vnc_conn()
         ks_project = self._ks_project_get(id=id.replace('-', ''))
         display_name = ks_project['name']
-        proj_name = display_name
 
         # if earlier project exists with same name but diff id,
         # create with uniqified fq_name
@@ -386,28 +341,11 @@ class OpenstackDriver(vnc_plugin_base.Resync):
             if old_id == id:
                 self._vnc_project_ids.add(id)
                 return
-            # Project might have been quickly deleted + added.
-            # Since project delete sync happens only in timer(polling),
-            # try deleting old one synchronously. If delete fails due
-            # to resources being present in project, proceed/fail
-            # based on configuration
-            try:
-                self._vnc_lib.project_delete(fq_name=fq_name)
-            except vnc_api.NoIdError:
-                pass
-            except vnc_api.RefsExistError:
-                if self._resync_stale_mode == 'new_unique_fqn':
-                    proj_name = '%s-%s' %(display_name, str(uuid.uuid4()))
-                else:
-                    errmsg = "Old project %s fqn %s exists and not empty" %(
-                        old_id, fq_name)
-                    self._sandesh_logger.error(errmsg)
-                    raise Exception(errmsg)
+            proj_name = '%s-%s' %(display_name, str(uuid.uuid4()))
         except vnc_api.NoIdError:
-            pass
+            proj_name = display_name
 
         proj_obj = vnc_api.Project(proj_name)
-        proj_obj.display_name = display_name
         proj_obj.uuid = id
         self._vnc_lib.project_create(proj_obj)
         self._vnc_project_ids.add(id)
@@ -438,38 +376,47 @@ class OpenstackDriver(vnc_plugin_base.Resync):
     # _ksv2_del_project_from_vnc
 
     def _ksv3_get_conn(self):
-        if self._admin_token:
-           if not self._insecure and self._use_certs:
-              return keystonev3.Client(token=self._admin_token,
-                                       endpoint=self._auth_url,
-                                       verify=self._kscertbundle)
-           else:
-              return keystonev3.Client(token=self._admin_token,
-                                       endpoint=self._auth_url,
-                                       insecure=self._insecure)
-        elif self._project_domain_name:
-            return keystonev3.Client(user_domain_name=self._user_domain_name,
-                                     username=self._auth_user,
-                                     password=self._auth_passwd,
-                                     project_domain_name=self._project_domain_name,
-                                     project_name=self._project_name,
-                                     auth_url=self._auth_url,
-                                     insecure=self._insecure)
-        else:
-           if not self._insecure and self._use_certs:
-               return keystonev3.Client(user_domain_name=self._user_domain_name,
-                                        username=self._auth_user,
-                                        password=self._auth_passwd,
-                                        domain_id=self._domain_id,
-                                        auth_url=self._auth_url,
-                                        verify=self._kscertbundle)
-           else:
-               return keystonev3.Client(user_domain_name=self._user_domain_name,
-                                        username=self._auth_user,
-                                        password=self._auth_passwd,
-                                        domain_id=self._domain_id,
-                                        auth_url=self._auth_url,
-                                        insecure=self._insecure)
+        if not self._ks:
+            if self._admin_token:
+               if not self._insecure and self._use_certs:
+                  self._ks = keystonev3.Client(token=self._admin_token,
+                                               endpoint=self._auth_url,
+                                               verify=self._kscertbundle)
+               else:
+                  self._ks = keystonev3.Client(token=self._admin_token,
+                                               endpoint=self._auth_url,
+                                               insecure=self._insecure)
+            elif self._project_domain_name:
+                self._ks = keystonev3.Client(user_domain_name=self._user_domain_name,
+                                             username=self._auth_user,
+                                             password=self._auth_passwd,
+                                             project_domain_name=self._project_domain_name,
+                                             project_name=self._project_name,
+                                             auth_url=self._auth_url,
+                                             insecure=self._insecure)
+            else:
+               if not self._insecure and self._use_certs:
+                   self._ks = keystonev3.Client(user_domain_name=self._user_domain_name,
+                                                username=self._auth_user,
+                                                password=self._auth_passwd,
+                                                domain_id=self._domain_id,
+                                                auth_url=self._auth_url,
+                                                verify=self._kscertbundle)
+               else:
+                   self._ks = keystonev3.Client(user_domain_name=self._user_domain_name,
+                                                username=self._auth_user,
+                                                password=self._auth_passwd,
+                                                domain_id=self._domain_id,
+                                                auth_url=self._auth_url,
+                                                insecure=self._insecure)
+
+
+            if self._endpoint_type and self._ks.service_catalog:
+                self._ks.management_url = \
+                    self._ks.service_catalog.get_urls(
+                        service_type='identity',
+                        endpoint_type=self._endpoint_type)[0]
+
     # end _ksv3_get_conn
 
     def _ksv3_domains_list(self):
@@ -486,13 +433,8 @@ class OpenstackDriver(vnc_plugin_base.Resync):
     def _ksv3_domain_get(self, id=None):
         try:
             return {'name': self._ks.domains.get(id).name}
-        except Exception as e:
-            if self._ks is not None:
-                self._ks = None
-                ConnectionState.update(conn_type=ConnType.OTHER,
-                    name='Keystone', status=ConnectionStatus.DOWN,
-                    message='Error: %s at UTC %s' %(e, datetime.utcnow()),
-                    server_addrs=[self._auth_url])
+        except:
+            self._ks = None
             self._get_keystone_conn()
             return {'name': self._ks.domains.get(id).name}
     # end _ksv3_domain_get
@@ -506,12 +448,7 @@ class OpenstackDriver(vnc_plugin_base.Resync):
             project = self._ks.projects.get(id)
             return {'id': project.id, 'name': project.name, 'domain_id': project.domain_id}
         except Exception as e:
-            if self._ks is not None:
-                self._ks = None
-                ConnectionState.update(conn_type=ConnType.OTHER,
-                    name='Keystone', status=ConnectionStatus.DOWN,
-                    message='Error: %s at UTC %s' %(e, datetime.utcnow()),
-                    server_addrs=[self._auth_url])
+            self._ks = None
             self._get_keystone_conn()
             project = self._ks.projects.get(id)
             return {'id': project.id, 'name': project.name, 'domain_id': project.domain_id}
@@ -537,34 +474,16 @@ class OpenstackDriver(vnc_plugin_base.Resync):
         # if earlier project exists with same name but diff id,
         # create with uniqified fq_name
         fq_name = dom_obj.get_fq_name() + [display_name]
-        project_name = display_name
         try:
             old_id = self._vnc_lib.fq_name_to_id('project', fq_name)
             if old_id == project_id:
                 self._vnc_project_ids.add(project_id)
                 return
-            # Project might have been quickly deleted + added.
-            # Since project delete sync happens only in timer(polling),
-            # try deleting old one synchronously. If delete fails due
-            # to resources being present in project, proceed/fail
-            # based on configuration
-            try:
-                self._vnc_lib.project_delete(fq_name=fq_name)
-            except vnc_api.NoIdError:
-                pass
-            except vnc_api.RefsExistError:
-                if self._resync_stale_mode == 'new_unique_fqn':
-                    project_name = '%s-%s' %(display_name, str(uuid.uuid4()))
-                else:
-                    errmsg = "Old project %s fqn %s exists and not empty" %(
-                        old_id, fq_name)
-                    self._sandesh_logger.error(errmsg)
-                    raise Exception(errmsg)
+            project_name = '%s-%s' %(display_name, str(uuid.uuid4()))
         except vnc_api.NoIdError:
-            pass
+            project_name = display_name
 
         proj_obj = vnc_api.Project(project_name, parent_obj=dom_obj)
-        proj_obj.display_name = display_name
         proj_obj.uuid = project_id
         self._vnc_lib.project_create(proj_obj)
         self._vnc_domain_ids.add(domain_uuid)
@@ -601,7 +520,6 @@ class OpenstackDriver(vnc_plugin_base.Resync):
         ks_domain = \
             self._ks_domain_get(domain_id.replace('-', ''))
         display_name = ks_domain['name']
-        domain_name = display_name
 
         # if earlier domain exists with same name but diff id,
         # create with uniqified fq_name
@@ -611,29 +529,11 @@ class OpenstackDriver(vnc_plugin_base.Resync):
             if domain_id == old_id:
                 self._vnc_domain_ids.add(domain_id)
                 return
-
-            # Domain might have been quickly deleted + added.
-            # Since domain delete sync happens only in timer(polling),
-            # try deleting old one synchronously. If delete fails due
-            # to resources being present in domain, proceed/fail
-            # based on configuration
-            try:
-                self._vnc_lib.domain_delete(fq_name=fq_name)
-            except vnc_api.NoIdError:
-                pass
-            except vnc_api.RefsExistError:
-                if self._resync_stale_mode == 'new_unique_fqn':
-                    domain_name = '%s-%s' %(display_name, str(uuid.uuid4()))
-                else:
-                    errmsg = "Old domain %s fqn %s exists and not empty" %(
-                        old_id, fq_name)
-                    self._sandesh_logger.error(errmsg)
-                    raise Exception(errmsg)
+            domain_name = '%s-%s' %(display_name, str(uuid.uuid4()))
         except vnc_api.NoIdError:
-            pass
+            domain_name = display_name
 
         dom_obj = vnc_api.Domain(domain_name)
-        dom_obj.display_name = display_name
         dom_obj.uuid = domain_id
         self._vnc_lib.domain_create(dom_obj)
         self._vnc_domain_ids.add(domain_id)
@@ -681,12 +581,7 @@ class OpenstackDriver(vnc_plugin_base.Resync):
                     for dom in self._ks_domains_list() if dom['id'] != 'default'])
             ks_domain_ids.add(self._vnc_default_domain_id)
         except Exception as e:
-            if self._ks is not None:
-                self._ks = None
-                ConnectionState.update(conn_type=ConnType.OTHER,
-                    name='Keystone', status=ConnectionStatus.DOWN,
-                    message='Error: %s at UTC %s' %(e, datetime.utcnow()),
-                    server_addrs=[self._auth_url])
+            self._ks = None
             return True # retry
 
         vnc_domain_ids = self._vnc_domain_ids
@@ -724,12 +619,7 @@ class OpenstackDriver(vnc_plugin_base.Resync):
                 [str(uuid.UUID(proj['id']))
                     for proj in self._ks_projects_list()])
         except Exception as e:
-            if self._ks is not None:
-                self._ks = None
-                ConnectionState.update(conn_type=ConnType.OTHER,
-                    name='Keystone', status=ConnectionStatus.DOWN,
-                    message='Error: %s at UTC %s' %(e, datetime.utcnow()),
-                    server_addrs=[self._auth_url])
+            self._ks = None
             return True # retry
 
         vnc_project_ids = self._vnc_project_ids
@@ -786,34 +676,24 @@ class OpenstackDriver(vnc_plugin_base.Resync):
             try:
                 retry = self._resync_all_domains()
                 if retry:
-                    gevent.sleep(self._resync_interval_secs)
+                    gevent.sleep(60)
                     continue
             except Exception as e:
-                if self._ks is not None:
-                    self._ks = None
-                    ConnectionState.update(conn_type=ConnType.OTHER,
-                        name='Keystone', status=ConnectionStatus.DOWN,
-                        message='Error: %s at UTC %s' %(e, datetime.utcnow()),
-                        server_addrs=[self._auth_url])
-                    self._cgitb_error_log()
-                    self._sandesh_logger.error(
-                        "Failed to resync domains: %s" %  e)
+                self._ks = None
+                self._cgitb_error_log()
+                self._sandesh_logger.error(
+                    "Failed to resync domains: %s" %  e)
 
             try:
                 retry = self._resync_all_projects()
                 if retry:
-                    gevent.sleep(self._resync_interval_secs)
+                    gevent.sleep(60)
                     continue
             except Exception as e:
-                if self._ks is not None:
-                    self._ks = None
-                    ConnectionState.update(conn_type=ConnType.OTHER,
-                        name='Keystone', status=ConnectionStatus.DOWN,
-                        message='Error: %s at UTC %s' %(e, datetime.utcnow()),
-                        server_addrs=[self._auth_url])
-                    self._cgitb_error_log()
-                    self._sandesh_logger.error(
-                        "Failed to resync projects: %s" %  e)
+                self._ks = None
+                self._cgitb_error_log()
+                self._sandesh_logger.error(
+                    "Failed to resync projects: %s" %  e)
 
             gevent.sleep(self._resync_interval_secs)
 
@@ -851,7 +731,7 @@ class OpenstackDriver(vnc_plugin_base.Resync):
                                         obj_type)
                 else:
                     raise KeyError("An invalid operation was specified: %s", oper)
-            except (ValueError, KeyError, Exception):
+            except (ValueError, KeyError):
                 # For an unpack error or and invalid kind.
                 self.log_exception()
             finally:
@@ -1119,7 +999,6 @@ class NeutronApiDriver(vnc_plugin_base.NeutronApi):
                      'POST', self._npi.plugin_http_post_virtual_router)
 
     def route(self, uri, method, handler):
-        @use_context
         def handler_trap_exception(*args, **kwargs):
             try:
                 response = handler(*args, **kwargs)

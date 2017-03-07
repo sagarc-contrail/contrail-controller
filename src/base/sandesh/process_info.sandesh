@@ -24,7 +24,6 @@ enum ConnectionType {
     REDIS_UVE,
     UVEPARTITIONS,
     KAFKA_PUB,
-    OTHER,
 }
 
 const map<ConnectionType, string> ConnectionTypeNames = {
@@ -40,8 +39,7 @@ const map<ConnectionType, string> ConnectionTypeNames = {
     ConnectionType.TOR : "ToR",
     ConnectionType.REDIS_UVE: "Redis-UVE",
     ConnectionType.UVEPARTITIONS : "UvePartitions",
-    ConnectionType.KAFKA_PUB : "KafkaPub",
-    ConnectionType.OTHER: "Generic Connection"
+    ConnectionType.KAFKA_PUB : "KafkaPub"
 }
 
 enum ConnectionStatus {

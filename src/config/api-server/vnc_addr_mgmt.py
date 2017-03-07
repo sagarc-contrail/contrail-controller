@@ -345,9 +345,14 @@ class Subnet(object):
                                               network.size,
                                               ip_alloc_unit)
 
-        # reserve excluded addresses only in bitmap but not in zk
+        # reserve excluded addresses
         for addr in exclude:
-            self._db_conn.subnet_set_in_use(name, int(addr)/ip_alloc_unit)
+            if should_persist:
+                self._db_conn.subnet_reserve_req(name, int(addr)/ip_alloc_unit,
+                                                 'system-reserved')
+            else:
+                self._db_conn.subnet_set_in_use(name, int(addr))
+
         self._name = name
         self._network = network
         self._version = network.version
@@ -382,8 +387,6 @@ class Subnet(object):
     # ip_reserve/alloc/free persist to DB
     def is_ip_allocated(self, ipaddr):
         ip = IPAddress(ipaddr)
-        if ip in self._exclude:
-            return True
         addr = int(ip)
         return self._db_conn.subnet_is_addr_allocated(self._name, addr)
     # end is_ip_allocated

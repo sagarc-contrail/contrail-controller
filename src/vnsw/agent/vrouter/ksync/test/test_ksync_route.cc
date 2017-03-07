@@ -8,16 +8,11 @@
 
 #include "testing/gunit.h"
 #include "test/test_cmn_util.h"
-#include "oper/path_preference.h"
 #include "vrouter/ksync/route_ksync.h"
 
 struct PortInfo input[] = {
     {"vnet1", 1, "1.1.1.1", "00:00:00:01:01:01", 1, 1},
     {"vnet2", 2, "1.1.1.2", "00:00:00:01:01:02", 1, 2}
-};
-
-IpamInfo ipam_info[] = {
-    {"1.1.1.0", 24, "1.1.1.10", true},
 };
 
 class TestKSyncRoute : public ::testing::Test {
@@ -28,9 +23,6 @@ public:
         client->WaitForIdle();
         EXPECT_TRUE(VmPortActive(1));
         EXPECT_TRUE(VmPortActive(2));
-
-        AddIPAM("vn1", ipam_info, 1);
-        client->WaitForIdle();
 
         vnet1_ = static_cast<VmInterface *>(VmPortGet(1));
         vnet2_ = static_cast<VmInterface *>(VmPortGet(2));
@@ -65,8 +57,6 @@ public:
 
     virtual void TearDown() {
         DeleteVmportEnv(input, 2, true, 1);
-        client->WaitForIdle();
-        DelIPAM("vn1");
         client->WaitForIdle();
         WAIT_FOR(1000, 100, (VmPortFindRetDel(1) == false));
         WAIT_FOR(1000, 100, (VmPortFindRetDel(2) == false));
@@ -130,11 +120,8 @@ TEST_F(TestKSyncRoute, vm_interface_route_1) {
     InetUnicastRouteEntry *rt = vrf1_uc_table_->FindLPM(vnet1_->primary_ip_addr());
     EXPECT_TRUE(rt != NULL);
 
-    MacAddress mac("00:00:00:01:01:01");
     std::auto_ptr<RouteKSyncEntry> ksync(new RouteKSyncEntry(vrf1_rt_obj_, rt));
     EXPECT_TRUE(vrf1_obj_->RouteNeedsMacBinding(rt));
-    EXPECT_TRUE(vrf1_obj_->GetIpMacBinding(vrf1_, vnet1_->primary_ip_addr()) ==
-                mac);
 
     ksync->BuildArpFlags(rt, rt->GetActivePath(), vnet1_->mac());
     EXPECT_TRUE(ksync->proxy_arp());
@@ -233,7 +220,6 @@ TEST_F(TestKSyncRoute, remote_evpn_route_1) {
     BridgeRouteEntry *rt = vrf1_bridge_table_->FindRoute(mac);
     EXPECT_TRUE(rt != NULL);
 
-    EXPECT_TRUE(vrf1_obj_->GetIpMacBinding(vrf1_, addr) == mac);
     std::auto_ptr<RouteKSyncEntry> ksync(new RouteKSyncEntry(vrf1_bridge_rt_obj_, rt));
     ksync->Sync(rt);
     EXPECT_TRUE(ksync->flood_dhcp()); // flood DHCP set for MAC without VMI
@@ -241,13 +227,12 @@ TEST_F(TestKSyncRoute, remote_evpn_route_1) {
     vrf1_evpn_table_->DeleteReq(bgp_peer, "vrf1", mac, addr, ethernet_tag,
                                 (new ControllerVmRoute(bgp_peer)));
     client->WaitForIdle();
-    EXPECT_TRUE(vrf1_obj_->GetIpMacBinding(vrf1_, addr) == MacAddress::ZeroMac());
 }
 
 // proxy_arp_ and flood_ flags for route with different VNs
 TEST_F(TestKSyncRoute, different_vn_1) {
     boost::system::error_code ec;
-    BgpPeer *bgp_peer = CreateBgpPeer(Ip4Address::from_string("0.0.0.10", ec),
+    BgpPeer *bgp_peer = CreateBgpPeer(Ip4Address::from_string("0.0.0.1", ec),
                                       "xmpp channel");
     IpAddress addr = IpAddress(Ip4Address::from_string("2.2.2.100"));
     AddRemoteRoute(bgp_peer, addr, 32, "Vn3");
@@ -440,83 +425,6 @@ TEST_F(TestKSyncRoute, ecmp_ipam_subnet_route_2) {
     client->WaitForIdle();
     DeleteBgpPeer(bgp_peer);
     client->WaitForIdle();
-}
-
-TEST_F(TestKSyncRoute, ecmp_mac_stitching) {
-    struct PortInfo input1[] = {
-        {"vnet3", 3, "1.1.1.1", "00:00:00:00:01:01", 1, 3},
-    };
-
-    CreateVmportEnv(input1, 1);
-    client->WaitForIdle();
-
-    MacAddress mac("00:00:00:00:01:01");
-    EXPECT_TRUE(vrf1_obj_->GetIpMacBinding(vrf1_, vnet1_->primary_ip_addr()) ==
-                mac);
-
-    DeleteVmportEnv(input1, 1, false);
-    client->WaitForIdle();
-
-    MacAddress mac1("00:00:00:01:01:01");
-    EXPECT_TRUE(vrf1_obj_->GetIpMacBinding(vrf1_, vnet1_->primary_ip_addr()) ==
-                mac1);
-}
-
-TEST_F(TestKSyncRoute, ecmp_mac_stitching_2) {
-    struct PortInfo input1[] = {
-        {"vnet3", 3, "1.1.1.1", "00:00:00:00:01:02", 1, 3},
-    };
-
-    CreateVmportEnv(input1, 1);
-    client->WaitForIdle();
-
-    MacAddress mac("00:00:00:00:01:02");
-    EXPECT_TRUE(vrf1_obj_->GetIpMacBinding(vrf1_, vnet1_->primary_ip_addr()) ==
-                mac);
-
-    Agent::GetInstance()->oper_db()->route_preference_module()->
-        EnqueueTrafficSeen(vnet1_->primary_ip_addr(), 32,
-                           vnet1_->id(), vnet1_->vrf()->vrf_id(),
-                           vnet1_->vm_mac());
-    client->WaitForIdle();
-
-    MacAddress mac1("00:00:00:01:01:01");
-    EXPECT_TRUE(vrf1_obj_->GetIpMacBinding(vrf1_, vnet1_->primary_ip_addr()) ==
-                mac1);
-
-    DeleteVmportEnv(input1, 1, false);
-    client->WaitForIdle();
-
-    EXPECT_TRUE(vrf1_obj_->GetIpMacBinding(vrf1_, vnet1_->primary_ip_addr()) ==
-                mac1);
-}
-
-TEST_F(TestKSyncRoute, evpn_wait_for_traffic) {
-    //Send traffic for inet route only
-    //such that EVPN route is wait_for_traffic state
-    //and verify ...ip route would be still in wait for traffic state
-    InetUnicastRouteEntry *rt = vrf1_uc_table_->FindLPM(vnet1_->primary_ip_addr());
-    EXPECT_TRUE(rt != NULL);
-    EXPECT_TRUE(vrf1_obj_->GetIpMacWaitForTraffic(vrf1_,
-                                      vnet1_->primary_ip_addr()));
-
-    Agent::GetInstance()->oper_db()->route_preference_module()->
-               EnqueueTrafficSeen(vnet1_->primary_ip_addr(), 32,
-                                  vnet1_->id(), vnet1_->vrf()->vrf_id(),
-                                  MacAddress::ZeroMac());
-    client->WaitForIdle();
-
-    EXPECT_TRUE(vrf1_obj_->GetIpMacWaitForTraffic(vrf1_,
-                                   vnet1_->primary_ip_addr()));
-
-    Agent::GetInstance()->oper_db()->route_preference_module()->
-               EnqueueTrafficSeen(vnet1_->primary_ip_addr(), 32,
-                                  vnet1_->id(), vnet1_->vrf()->vrf_id(),
-                                  vnet1_->vm_mac());
-    client->WaitForIdle();
-
-    EXPECT_FALSE(vrf1_obj_->GetIpMacWaitForTraffic(vrf1_,
-                                   vnet1_->primary_ip_addr()));
 }
 
 int main(int argc, char **argv) {

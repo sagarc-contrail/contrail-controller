@@ -11,6 +11,7 @@
 #include "boost/date_time/posix_time/posix_time.hpp"
 #include "diag/diag_pkt_handler.h"
 struct AgentDiagPktData;
+struct VxLanOamTlv;
 struct OverlayOamPktData;
 class DiagProto;
 class DiagTable;
@@ -45,9 +46,7 @@ public:
         return diag_table_;
     }
     uint32_t HashValUdpSourcePort();
-    void FillOamPktHeader(OverlayOamPktData *pktdata, uint32_t vxlan_id,
-                          const boost::posix_time::ptime &time);
-
+    void FillOamPktHeader(OverlayOamPktData *pktdata, uint32_t vxlan_id);
 protected:
     Ip4Address sip_;
     Ip4Address dip_;
@@ -81,7 +80,7 @@ struct AgentDiagPktData {
 struct DiagEntryOp {
     enum Op {
         ADD = 1,
-        DELETE,
+        DEL,
         RETRY,
     };
 
@@ -114,71 +113,31 @@ private:
     Agent *agent_;
 };
 
-struct OamTlv {
-    enum Type {
-        VXLAN_PING_IPv4 = 1,
-        VXLAN_PING_IPv6 = 2,
-        NVGRE_PING_IPv4 = 3,
-        NVGRE_PING_IPv6 = 4,
-        MPLSoGRE_PING_IPv4 = 5,
-        MPLSoGRE_PING_IPv6 = 6,
-        MPLSoUDP_PING_IPv4 = 7,
-        MPLSoUDP_PING_IPv6 = 8,
-    };
-
-    struct VxlanOamTlv {
-        uint32_t vxlan_id_;
-        uint32_t sip_;
-    };
-
+struct VxLanOamTlv{
     uint16_t type_;
     uint16_t length_;
-    char data_[1];
+    uint32_t vxlan_id_;
+    Ip4Address sip_;
 };
 
-struct SubTlv {
-    enum Type {
-        END_SYSTEM_MAC = 1,
-        END_SYSTEM_IPv4 = 2,
-        END_SYSTEM_IPv6 = 3,
-        END_SYSTEM_MAC_IPv4 = 4,
-        END_SYSTEM_MAC_IPv6 = 5,
-    };
-
-    enum ReturnCode {
-        END_SYSTEM_PRESENT = 1,
-        END_SYSTEM_NOT_PRESENT = 2,
-    };
-
-    uint16_t type_;
-    uint16_t length_;
-
-    struct EndSystemMac {
-        uint8_t mac[6];
-        uint16_t return_code;
-    };
-};
-
-struct OverlayOamPktData {
+struct OverlayOamPktData{
    enum MsgType {
     OVERLAY_ECHO_REQUEST = 1,
     OVERLAY_ECHO_REPLY = 2
-   };
 
+   };
    enum Returncode {
     NO_RETURN_CODE = 0,
     MALFORMED_ECHO_REQUEST = 1,
-    OVERLAY_SEGMENT_NOT_PRESENT = 2,
-    OVERLAY_SEGMENT_NOT_OPERATIONAL = 3,
+    OVERLAY_SEGMENT_NOT_PRESET =2,
+    OVERLAY_SEGMENT_NOT_OPERATIONAL =3,
     RETURN_CODE_OK = 4, 
    };
-
    enum Replymode {
     DONT_REPLY = 1,
     REPLY_IPV4ORV6_UDP = 2,
-    REPLY_OVERLAY_SEGMENT = 3,
+    REPLY_OVERLAY_SEGMENT =3,
    }; 
-
    uint8_t msg_type_;
    uint8_t reply_mode_;
    uint8_t return_code_;
@@ -189,6 +148,6 @@ struct OverlayOamPktData {
    uint32_t timesent_misec_;
    uint32_t timerecv_sec_;
    uint32_t timerecv_misec_;
-   OamTlv oamtlv_;
+   VxLanOamTlv vxlanoamtlv_;
 };
 #endif

@@ -17,7 +17,6 @@
 #include <ksync/ksync_netlink.h>
 #include "oper/nexthop.h"
 #include "oper/route_common.h"
-#include "oper/agent_route_walker.h"
 #include "vrouter/ksync/agent_ksync_types.h"
 #include "vrouter/ksync/nexthop_ksync.h"
 
@@ -96,10 +95,8 @@ private:
 class RouteKSyncObject : public KSyncDBObject {
 public:
     struct VrfState : DBState {
-        VrfState() : DBState(), seen_(false),
-        created_(UTCTimestampUsec()) {};
+        VrfState() : DBState(), seen_(false) {};
         bool seen_;
-        uint64_t created_;
     };
 
     RouteKSyncObject(KSync *ksync, AgentRouteTable *rt_table);
@@ -122,70 +119,14 @@ private:
     DISALLOW_COPY_AND_ASSIGN(RouteKSyncObject);
 };
 
-struct MacBinding {
-    typedef std::map<const MacAddress,
-                     PathPreference> MacPreferenceMap;
-    typedef std::pair<const MacAddress,
-                      PathPreference> MacPreferencePair;
-
-    MacBinding(const MacBinding &mac_binding):
-        mac_preference_map_(mac_binding.mac_preference_map_) {}
-
-    MacBinding(const MacAddress &mac, const PathPreference &pref) {
-        mac_preference_map_[mac] = pref;
-    }
-
-    const MacAddress& get_mac() const {
-        const MacAddress *mac = &MacAddress::ZeroMac();
-        PathPreference::Preference pref = PathPreference::INVALID;
-        for (MacPreferenceMap::const_iterator it = mac_preference_map_.begin();
-                it != mac_preference_map_.end(); it++) {
-            if (*mac == MacAddress::ZeroMac() || pref < it->second.preference()) {
-                mac = &(it->first);
-                pref = it->second.preference();
-            }
-        }
-        return *mac;
-    }
-
-    void reset_mac(const MacAddress &mac) {
-        mac_preference_map_.erase(mac);
-    }
-
-    bool can_erase() {
-        if (mac_preference_map_.size() == 0) {
-            return true;
-        }
-        return false;
-    }
-
-    void set_mac(const PathPreference &pref,
-                 const MacAddress &mac) {
-        mac_preference_map_[mac] = pref;
-    }
-
-    bool WaitForTraffic() const {
-        for (MacPreferenceMap::const_iterator it = mac_preference_map_.begin();
-                it != mac_preference_map_.end(); it++) {
-            if (it->second.wait_for_traffic() == true) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-private:
-    MacPreferenceMap mac_preference_map_;
-};
-
-class KSyncRouteWalker;
 class VrfKSyncObject {
 public:
     // Table to maintain IP - MAC binding. Used to stitch MAC to inet routes
-    typedef std::map<IpAddress, MacBinding> IpToMacBinding;
+    typedef std::map<IpAddress, MacAddress> IpToMacBinding;
 
     struct VrfState : DBState {
-        VrfState(Agent *agent);
+        VrfState() : DBState(), seen_(false),
+        evpn_rt_table_listener_id_(DBTableBase::kInvalidId) {}
         bool seen_;
         RouteKSyncObject *inet4_uc_route_table_;
         RouteKSyncObject *inet4_mc_route_table_;
@@ -193,7 +134,6 @@ public:
         RouteKSyncObject *bridge_route_table_;
         IpToMacBinding  ip_mac_binding_;
         DBTableBase::ListenerId evpn_rt_table_listener_id_;
-        KSyncRouteWalker *ksync_route_walker_;
     };
 
     VrfKSyncObject(KSync *ksync);
@@ -209,14 +149,10 @@ public:
     void UnRegisterEvpnRouteTableListener(const VrfEntry *entry,
                                           VrfState *state);
     void AddIpMacBinding(VrfEntry *vrf, const IpAddress &ip,
-                         const MacAddress &mac,
-                         const PathPreference::Preference &pref,
-                         bool wait_for_traffic);
+                         const MacAddress &mac);
     void DelIpMacBinding(VrfEntry *vrf, const IpAddress &ip,
                          const MacAddress &mac);
     MacAddress GetIpMacBinding(VrfEntry *vrf, const IpAddress &ip) const;
-    bool GetIpMacWaitForTraffic(VrfEntry *vrf,
-                                const IpAddress &ip) const;
     void NotifyUcRoute(VrfEntry *vrf, VrfState *state, const IpAddress &ip);
     bool RouteNeedsMacBinding(const InetUnicastRouteEntry *rt);
     DBTableBase::ListenerId vrf_listener_id() const {return vrf_listener_id_;}
@@ -225,26 +161,6 @@ private:
     KSync *ksync_;
     DBTableBase::ListenerId vrf_listener_id_;
     DISALLOW_COPY_AND_ASSIGN(VrfKSyncObject);
-};
-
-//KSyncRouteWalker
-//This walker is need when vrf is notified for first time and some of the routes
-//have been notified before same. Ksync would have skipped those routes as vrf
-//was absent in ksync at that time. Walk will ensure those routes are not
-//skipped.
-//Only those routes are considered which do not have ksync state set.
-class KSyncRouteWalker : public AgentRouteWalker {
-public:
-    typedef DBTableWalker::WalkId RouteWalkerIdList[Agent::ROUTE_TABLE_MAX];
-    KSyncRouteWalker(Agent *agent, VrfKSyncObject::VrfState *state);
-    virtual ~KSyncRouteWalker();
-
-    void NotifyRoutes(VrfEntry *vrf);
-    virtual bool RouteWalkNotify(DBTablePartBase *partition, DBEntryBase *e);
-
-private:
-    VrfKSyncObject::VrfState *state_;
-    DISALLOW_COPY_AND_ASSIGN(KSyncRouteWalker);
 };
 
 #endif // vnsw_agent_route_ksync_h

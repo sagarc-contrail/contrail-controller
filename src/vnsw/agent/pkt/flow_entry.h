@@ -312,7 +312,7 @@ struct FlowEventLog {
         FLOW_EVICT,
         FLOW_HANDLE_ASSIGN,
         FLOW_MSG_SKIP_EVICTED,
-        EVENT_MAX
+        EVENT_MAXIMUM
     };
 
     FlowEventLog();
@@ -421,8 +421,6 @@ class FlowEntry {
         SHORT_FLOW_ON_TSN,
         SHORT_NO_MIRROR_ENTRY,
         SHORT_SAME_FLOW_RFLOW_KEY,
-        SHORT_NO_SRC_ROUTE_L2RPF,
-        SHORT_INACTIVE_NH,
         SHORT_MAX
     };
 
@@ -486,7 +484,6 @@ class FlowEntry {
 
     void Reset(const FlowKey &k);
     void Reset();
-    void SetKey(const FlowKey &k);
 
     // Copy data fields from rhs
     void Copy(FlowEntry *rhs, bool update);
@@ -494,18 +491,16 @@ class FlowEntry {
     void InitFwdFlow(const PktFlowInfo *info, const PktInfo *pkt,
                      const PktControlInfo *ctrl,
                      const PktControlInfo *rev_ctrl, FlowEntry *rflow,
-                     Agent *agent, bool l3_flow);
+                     Agent *agent);
     void InitRevFlow(const PktFlowInfo *info, const PktInfo *pkt,
                      const PktControlInfo *ctrl,
                      const PktControlInfo *rev_ctrl, FlowEntry *rflow,
-                     Agent *agent, bool l3_flow);
+                     Agent *agent);
     void InitAuditFlow(uint32_t flow_idx, uint8_t gen_id);
     static void Init();
 
     static AgentRoute *GetL2Route(const VrfEntry *entry, const MacAddress &mac);
     static AgentRoute *GetUcRoute(const VrfEntry *entry, const IpAddress &addr);
-    static AgentRoute *GetEvpnRoute(const VrfEntry *entry, const MacAddress &mac,
-                                    const IpAddress &addr, uint32_t ethernet_tag);
     static const SecurityGroupList &default_sg_list() {
         return default_sg_list_;
     }
@@ -654,12 +649,12 @@ class FlowEntry {
         flow_mgmt_request_ = req;
     }
 
-    FlowEntryInfo *flow_mgmt_info() const { return flow_mgmt_info_.get(); }
+    FlowEntryInfo *flow_mgmt_info() const { 
+		return flow_mgmt_info_.get(); 
+	}
     void set_flow_mgmt_info(FlowEntryInfo *info) {
-        flow_mgmt_info_.reset(info);
+       flow_mgmt_info_.reset(info);
     }
-    bool IsReverseFlow() const { return is_flags_set(FlowEntry::ReverseFlow); }
-    bool IsForwardFlow() const { return !is_flags_set(FlowEntry::ReverseFlow); }
 private:
     friend class FlowTable;
     friend class FlowEntryFreeList;
@@ -672,8 +667,7 @@ private:
     bool SetEcmpRpfNH(FlowTable*, uint32_t);
     bool SetRpfNHState(FlowTable*, const NextHop*);
     bool InitFlowCmn(const PktFlowInfo *info, const PktControlInfo *ctrl,
-                     const PktControlInfo *rev_ctrl, FlowEntry *rflow,
-                     bool l3_flow);
+                     const PktControlInfo *rev_ctrl, FlowEntry *rflow);
     void GetSourceRouteInfo(const AgentRoute *rt);
     void GetDestRouteInfo(const AgentRoute *rt);
     void UpdateRpf();

@@ -47,7 +47,7 @@ void RESTServer::VmPortDeleteHandler(const struct RESTData& data) {
     const std::string& port_id = (*data.match)[1];
     PortIpcHandler *pih = agent_->port_ipc_handler();
     if (pih) {
-        if (pih->DeletePort(port_id, error)) {
+        if (pih->DelPort(port_id, error)) {
             REST::SendResponse(data.session, "{}");
         } else {
             REST::SendErrorResponse(data.session, "{" + error + "}");
@@ -97,9 +97,6 @@ RESTServer::RESTServer(Agent *agent)
     : agent_(agent), http_server_(new HttpServer(agent->event_manager())) {
     http_server_->RegisterHandler(HTTP_WILDCARD_ENTRY,
         boost::bind(&RESTServer::HandleRequest, this, _1, _2));
-}
-
-void RESTServer::InitDone() {
     http_server_->Initialize(ContrailPorts::PortIpcVrouterAgentPort());
 }
 

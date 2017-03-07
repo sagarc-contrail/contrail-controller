@@ -17,6 +17,7 @@ from pysandesh.gen_py.sandesh.ttypes import SandeshLevel
 _WEB_HOST = '0.0.0.0'
 _WEB_PORT = 8082
 _ADMIN_PORT = 8095
+_CLOUD_ADMIN_ROLE = 'admin'
 
 def parse_args(args_str):
     args_obj = None
@@ -66,15 +67,13 @@ def parse_args(args_str):
         'rabbit_vhost': None,
         'rabbit_ha_mode': False,
         'rabbit_max_pending_updates': '4096',
-        'rabbit_health_check_interval': '120.0', # in seconds
         'cluster_id': '',
         'max_requests': 1024,
         'region_name': 'RegionOne',
         'sandesh_send_rate_limit': SandeshSystem.get_sandesh_send_rate_limit(),
         'ifmap_health_check_interval': '60', # in seconds
         'stale_lock_seconds': '5', # lock but no resource past this => stale
-        'cloud_admin_role': cfgm_common.CLOUD_ADMIN_ROLE,
-        'global_read_only_role': cfgm_common.GLOBAL_READ_ONLY_ROLE,
+        'cloud_admin_role': _CLOUD_ADMIN_ROLE,
         'rabbit_use_ssl': False,
         'kombu_ssl_version': '',
         'kombu_ssl_keyfile': '',
@@ -97,8 +96,7 @@ def parse_args(args_str):
         'admin_user': '',
         'admin_password': '',
         'admin_tenant_name': '',
-        'insecure': True,
-        'cafile': ''
+        'insecure': True
     }
     # cassandra options
     cassandraopts = {
@@ -277,9 +275,6 @@ def parse_args(args_str):
         "--rabbit_max_pending_updates",
         help="Max updates before stateful changes disallowed")
     parser.add_argument(
-        "--rabbit_health_check_interval",
-        help="Interval seconds between consumer heartbeats to rabbitmq")
-    parser.add_argument(
         "--cluster_id",
         help="Used for database keyspace separation")
     parser.add_argument(
@@ -297,10 +292,7 @@ def parse_args(args_str):
             help="Time after which lock without resource is stale, default 60")
     parser.add_argument( "--cloud_admin_role",
         help="Role name of cloud administrator")
-    parser.add_argument( "--global_read_only_role",
-        help="Role name of user with Read-Only access to all objects")
     args_obj, remaining_argv = parser.parse_known_args(remaining_argv)
-    args_obj.conf_file = args.conf_file
     args_obj.config_sections = config
     if type(args_obj.cassandra_server_list) is str:
         args_obj.cassandra_server_list =\

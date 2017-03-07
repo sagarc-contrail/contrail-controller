@@ -20,8 +20,6 @@
 from vnc_api.vnc_api import *
 from config_db import *
 from agent import Agent
-from module_logger import ServiceMonitorModuleLogger,MessageID
-from sandesh.port_tuple import ttypes as sandesh
 
 class PortTupleAgent(Agent):
 
@@ -29,14 +27,6 @@ class PortTupleAgent(Agent):
         super(PortTupleAgent, self).__init__(svc_mon, vnc_lib,
             cassandra, config_section)
         self.logger = logger
-
-        # Register log functions to be used for port tuple logs.
-        log_funcs = {
-                        MessageID.ERROR : sandesh.PortTupleErrorLog,
-                        MessageID.INFO  : sandesh.PortTupleInfoLog,
-                        MessageID.DEBUG : sandesh.PortTupleDebugLog,
-                    }
-        self.logger.add_messages(**log_funcs)
 
     def handle_service_type(self):
         return 'port-tuple'
@@ -94,7 +84,6 @@ class PortTupleAgent(Agent):
         iip_obj.set_service_health_check_ip(True)
         try:
             self._vnc_lib.instance_ip_create(iip_obj)
-            self._vnc_lib.ref_relax_for_delete(iip_obj.uuid, vn_obj.uuid)
         except RefsExistError:
             self._vnc_lib.instance_ip_update(iip_obj)
         except Exception as e:
@@ -141,7 +130,8 @@ class PortTupleAgent(Agent):
             break
 
         if allocate_hc_iip:
-            self._allocate_health_check_iip(port, vmi)
+            if not hc_iip:
+                self._allocate_health_check_iip(port, vmi)
         elif hc_iip:
             self._delete_health_check_iip(hc_iip, vmi)
 
@@ -172,7 +162,6 @@ class PortTupleAgent(Agent):
             self._vnc_lib.ref_update('virtual-machine-interface', vmi.uuid,
                 'interface-route-table', irt_id, None, 'ADD')
             vmi.update()
-            self._vnc_lib.ref_relax_for_delete(vmi.uuid, irt_id)
         # handle deletes
         for irt_id in list(vmi.interface_route_tables):
             if irt_id in port['interface-route-tables']:
@@ -230,8 +219,7 @@ class PortTupleAgent(Agent):
             update_aap = True
         else:
             for idx in range(0, len(vmi.aaps)):
-                if vmi.aaps[idx]['ip'] != aaps[idx]['ip'] or \
-                    vmi.aaps[idx]['mac'] != aaps[idx]['mac']:
+                if vmi.aaps[idx]['ip'] != aaps[idx]['ip']:
                     update_aap = True
                     break
         if update_aap:
@@ -262,10 +250,11 @@ class PortTupleAgent(Agent):
             return
         for iip_id in list(vmi.instance_ips):
             iip = InstanceIpSM.get(iip_id)
-            if iip and (iip.service_instance or iip.service_health_check_ip):
-                self._vnc_lib.ref_update('instance-ip', iip_id,
-                    'virtual-machine-interface', vmi.uuid, None, 'DELETE')
-                vmi.instance_ips.remove(iip_id)
+            if not iip or not iip.service_instance:
+                continue
+            self._vnc_lib.ref_update('instance-ip', iip_id,
+                'virtual-machine-interface', vmi.uuid, None, 'DELETE')
+            vmi.instance_ips.remove(iip_id)
 
         for irt_id in list(vmi.interface_route_tables):
             irt = InterfaceRouteTableSM.get(irt_id)
@@ -322,29 +311,20 @@ class PortTupleAgent(Agent):
         if pt_id:
             pt = PortTupleSM.get(pt_id)
         if not pt:
-            self.logger.debug("No valid port tuple provided to update")
             return
         si = ServiceInstanceSM.get(pt.parent_key)
         if not si:
-            self.logger.debug("Service Instance %s not found" % pt.parent_key)
             return
         st = ServiceTemplateSM.get(si.service_template)
         port_config = self.get_port_config(st, si)
         if not port_config:
-            self.logger.debug( \
-                 "Failed to construct port config for Port Tuple %s" % pt.uuid)
             return
 
         for vmi_id in list(pt.virtual_machine_interfaces):
             vmi = VirtualMachineInterfaceSM.get(vmi_id)
             if not vmi:
-                self.logger.debug( \
-                     "VMI %s not found for Port Tuple %s" % (vmi_id, pt.uuid))
                 continue
             if not vmi.params:
-                self.logger.debug( \
-                     "VMI %s has invalid params for Port Tuple %s" % \
-                     (vmi_id, pt.uuid))
                 continue
             port = port_config[vmi.params.get('service_interface_type')]
             if not port:

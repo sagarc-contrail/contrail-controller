@@ -39,14 +39,14 @@ public:
     };
 
     struct ArpIpc : InterTaskMsg {
-        ArpIpc(ArpProto::ArpMsgType msg, ArpKey &akey, InterfaceConstRef itf)
+        ArpIpc(ArpProto::ArpMsgType msg, ArpKey &akey, const Interface* itf)
             : InterTaskMsg(msg), key(akey), interface(itf) {}
         ArpIpc(ArpProto::ArpMsgType msg, in_addr_t ip, const VrfEntry *vrf,
-               InterfaceConstRef itf) :
+               const Interface* itf) :
             InterTaskMsg(msg), key(ip, vrf), interface(itf) {}
 
         ArpKey key;
-        InterfaceConstRef interface;
+        const Interface *interface;
     };
 
     struct ArpStats {
@@ -109,11 +109,10 @@ public:
         ip_fabric_interface_mac_ = mac;
     }
 
-    void  AddGratuitousArpEntry(ArpKey &key);
-    void DeleteGratuitousArpEntry(ArpEntry *entry);
-    ArpEntry* GratiousArpEntry (const ArpKey &key);
-    ArpProto::ArpIterator GratiousArpEntryIterator(const ArpKey & key,
-                                                   bool *key_valid);
+    ArpEntry *gratuitous_arp_entry() const;
+    void set_gratuitous_arp_entry(ArpEntry *entry);
+    void del_gratuitous_arp_entry();
+
     void IncrementStatsArpReq() { arp_stats_.arp_req++; }
     void IncrementStatsArpReplies() { arp_stats_.arp_replies++; }
     void IncrementStatsGratuitous() { arp_stats_.arp_gratuitous++; }
@@ -156,29 +155,26 @@ public:
     void set_retry_timeout(uint32_t timeout) { retry_timeout_ = timeout; }
     void set_aging_timeout(uint32_t timeout) { aging_timeout_ = timeout; }
     void SendArpIpc(ArpProto::ArpMsgType type, in_addr_t ip,
-                    const VrfEntry *vrf, InterfaceConstRef itf);
+                    const VrfEntry *vrf, const Interface* itf);
     bool ValidateAndClearVrfState(VrfEntry *vrf, const ArpVrfState *vrf_state);
     ArpIterator FindUpperBoundArpEntry(const ArpKey &key);
     ArpIterator FindLowerBoundArpEntry(const ArpKey &key);
 
-    DBTableBase::ListenerId vrf_table_listener_id() const {
-        return vrf_table_listener_id_;
-    }
 private:
     void VrfNotify(DBTablePartBase *part, DBEntryBase *entry);
     void NextHopNotify(DBEntryBase *entry);
     void InterfaceNotify(DBEntryBase *entry);
     void SendArpIpc(ArpProto::ArpMsgType type, ArpKey &key,
-                    InterfaceConstRef itf);
+                    const Interface* itf);
     ArpProto::ArpIterator DeleteArpEntry(ArpProto::ArpIterator iter);
 
     ArpCache arp_cache_;
     ArpStats arp_stats_;
-    ArpCache gratuitous_arp_cache_;
     bool run_with_vrouter_;
     uint32_t ip_fabric_interface_index_;
     MacAddress ip_fabric_interface_mac_;
     Interface *ip_fabric_interface_;
+    ArpEntry *gratuitous_arp_entry_;
     DBTableBase::ListenerId vrf_table_listener_id_;
     DBTableBase::ListenerId interface_table_listener_id_;
     DBTableBase::ListenerId nexthop_table_listener_id_;
@@ -191,146 +187,54 @@ private:
     DISALLOW_COPY_AND_ASSIGN(ArpProto);
 };
 
-//Stucture used to retry ARP queries when a particular route is in
-//backup state.
-class ArpPathPreferenceState {
-public:
-    static const uint32_t kMaxRetry = 30 * 5; //retries upto 5 minutes,
-                                              //30 tries/per minutes
-    static const uint32_t kTimeout = 2000;
-    typedef std::map<uint32_t, uint32_t> WaitForTrafficIntfMap;
-    typedef std::set<uint32_t> ArpTransmittedIntfMap;
-
-    ArpPathPreferenceState(ArpVrfState *state, uint32_t vrf_id,
-                           const IpAddress &vm_ip, uint8_t plen);
-    ~ArpPathPreferenceState();
-
-    bool SendArpRequest();
-    bool SendArpRequest(WaitForTrafficIntfMap &wait_for_traffic_map,
-                        ArpTransmittedIntfMap &arp_transmitted_intf_map);
-    void SendArpRequestForAllIntf(const AgentRoute *route);
-    void StartTimer();
-
-    ArpVrfState* vrf_state() {
-        return vrf_state_;
-    }
-
-    const IpAddress& ip() const {
-        return vm_ip_;
-    }
-
-    bool IntfPresentInIpMap(uint32_t id) {
-        if (l3_wait_for_traffic_map_.find(id) ==
-                l3_wait_for_traffic_map_.end()) {
-            return false;
-        }
-        return true;
-    }
-
-    bool IntfPresentInEvpnMap(uint32_t id) {
-        if (evpn_wait_for_traffic_map_.find(id) ==
-                evpn_wait_for_traffic_map_.end()) {
-            return false;
-        }
-        return true;
-    }
-
-    uint32_t IntfRetryCountInIpMap(uint32_t id) {
-        return l3_wait_for_traffic_map_[id];
-    }
-
-    uint32_t IntfRetryCountInEvpnMap(uint32_t id) {
-        return evpn_wait_for_traffic_map_[id];
-    }
-
-private:
-    friend void intrusive_ptr_add_ref(ArpPathPreferenceState *aps);
-    friend void intrusive_ptr_release(ArpPathPreferenceState *aps);
-    ArpVrfState *vrf_state_;
-    Timer *arp_req_timer_;
-    uint32_t vrf_id_;
-    IpAddress vm_ip_;
-    uint8_t plen_;
-    IpAddress gw_ip_;
-    WaitForTrafficIntfMap l3_wait_for_traffic_map_;
-    WaitForTrafficIntfMap evpn_wait_for_traffic_map_;
-    tbb::atomic<int> refcount_;
-};
-
-typedef boost::intrusive_ptr<ArpPathPreferenceState> ArpPathPreferenceStatePtr;
-
-void intrusive_ptr_add_ref(ArpPathPreferenceState *aps);
-void intrusive_ptr_release(ArpPathPreferenceState *aps);
-
 struct ArpVrfState : public DBState {
 public:
-    typedef std::map<const IpAddress,
-                     ArpPathPreferenceState*> ArpPathPreferenceStateMap;
-    typedef std::pair<const IpAddress,
-                      ArpPathPreferenceState*> ArpPathPreferenceStatePair;
     ArpVrfState(Agent *agent, ArpProto *proto, VrfEntry *vrf,
-                AgentRouteTable *table, AgentRouteTable *evpn_table);
-    ~ArpVrfState();
+                AgentRouteTable *table);
     void RouteUpdate(DBTablePartBase *part, DBEntryBase *entry);
-    void EvpnRouteUpdate(DBTablePartBase *part, DBEntryBase *entry);
     void ManagedDelete() { deleted = true;}
     void Delete();
     bool DeleteRouteState(DBTablePartBase *part, DBEntryBase *entry);
-    bool DeleteEvpnRouteState(DBTablePartBase *part, DBEntryBase *entry);
-    bool PreWalkDone(DBTableBase *partition);
+    void PreWalkDone(DBTableBase *partition);
     static void WalkDone(DBTableBase *partition, ArpVrfState *state);
-
-    ArpPathPreferenceState* Locate(const IpAddress &ip);
-    void Erase(const IpAddress &ip);
-    ArpPathPreferenceState* Get(const IpAddress ip) {
-        return arp_path_preference_map_[ip];
-    }
-
-    bool l3_walk_completed() const {
-        return l3_walk_completed_;
-    }
-
-    bool evpn_walk_completed() const {
-        return evpn_walk_completed_;
-    }
 
     Agent *agent;
     ArpProto *arp_proto;
     VrfEntry *vrf;
     AgentRouteTable *rt_table;
-    AgentRouteTable *evpn_rt_table;
     DBTableBase::ListenerId route_table_listener_id;
-    DBTableBase::ListenerId evpn_route_table_listener_id;
     LifetimeRef<ArpVrfState> table_delete_ref;
-    LifetimeRef<ArpVrfState> evpn_table_delete_ref;
     bool deleted;
     DBTableWalker::WalkId walk_id_;
-    DBTableWalker::WalkId evpn_walk_id_;
-    ArpPathPreferenceStateMap arp_path_preference_map_;
-    bool l3_walk_completed_;
-    bool evpn_walk_completed_;
     friend class ArpProto;
 };
 
 class ArpDBState : public DBState {
 public:
-    static const uint32_t kMaxRetry = 30 * 5; //retries upto 5 minutes,
-                                              //30 tries/per minutes
+    static const uint32_t kMaxRetry = 30;
     static const uint32_t kTimeout = 2000;
     typedef std::map<uint32_t, uint32_t> WaitForTrafficIntfMap;
 
     ArpDBState(ArpVrfState *vrf_state, uint32_t vrf_id,
                IpAddress vm_ip_addr, uint8_t plen);
     ~ArpDBState();
-    void Update(const AgentRoute *route);
+    bool SendArpRequest();
+    void SendArpRequestForAllIntf(const InetUnicastRouteEntry *route);
+    void StartTimer();
+    void Update(const InetUnicastRouteEntry *route);
     void UpdateArpRoutes(const InetUnicastRouteEntry *route);
     void Delete(const InetUnicastRouteEntry *rt);
 private:
     ArpVrfState *vrf_state_;
+    Timer *arp_req_timer_;
+    uint32_t vrf_id_;
+    IpAddress vm_ip_;
+    uint8_t plen_;
+    IpAddress gw_ip_;
     SecurityGroupList sg_list_;
     bool policy_;
     bool resolve_route_;
     VnListType vn_list_;
-    ArpPathPreferenceStatePtr arp_path_preference_state_;
+    WaitForTrafficIntfMap wait_for_traffic_map_;
 };
 #endif // vnsw_agent_arp_proto_hpp

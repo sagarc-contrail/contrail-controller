@@ -15,7 +15,7 @@ from cfgm_common import jsonutils as json
 import time
 import disc_consts
 
-from gevent.lock import BoundedSemaphore
+from gevent.coros import BoundedSemaphore
 
 
 class DiscoveryZkClient(object):

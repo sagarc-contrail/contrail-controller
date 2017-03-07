@@ -1,7 +1,8 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
-
+#include <boost/asio.hpp>
+#include <windows.h>
 #include <iostream>
 #include <list>
 #include <map>
@@ -69,8 +70,6 @@ int CfgFilter::GetIdPermsPropertyId(DBTable *table) const {
         return LogicalInterface::ID_PERMS;
     if (table == agent_cfg_->cfg_physical_device_table())
         return PhysicalRouter::ID_PERMS;
-    if (table == agent_cfg_->cfg_health_check_table())
-        return ServiceHealthCheck::ID_PERMS;
     if (table == agent_cfg_->cfg_qos_table())
         return autogen::QosConfig::ID_PERMS;
     if (table == agent_cfg_->cfg_qos_queue_table())
@@ -146,9 +145,6 @@ void CfgFilter::Init() {
         (boost::bind(&CfgFilter::CheckProperty, this, _1, _2, _3));
 
     agent_cfg_->cfg_physical_device_table()->RegisterPreFilter
-        (boost::bind(&CfgFilter::CheckProperty, this, _1, _2, _3));
-
-    agent_cfg_->cfg_health_check_table()->RegisterPreFilter
         (boost::bind(&CfgFilter::CheckProperty, this, _1, _2, _3));
 
     agent_cfg_->cfg_qos_table()->RegisterPreFilter

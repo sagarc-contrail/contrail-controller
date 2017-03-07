@@ -43,9 +43,8 @@ from sandesh_common.vns.constants import ModuleNames, Module2NodeType, NodeTypeN
     INSTANCE_ID_DEFAULT    
 from sandesh.discovery_introspect import ttypes as sandesh
 
-from gevent.lock import BoundedSemaphore
+from gevent.coros import BoundedSemaphore
 from cfgm_common.rest import LinkObject
-from cfgm_common import vnc_cgitb
 
 
 def obj_to_json(obj):
@@ -1135,7 +1134,8 @@ def main(args_str=None):
 # end main
 
 def server_main():
-    vnc_cgitb.enable(format='text')
+    import cgitb
+    cgitb.enable(format='text')
 
     main()
 # end server_main

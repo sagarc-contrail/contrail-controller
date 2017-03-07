@@ -12,6 +12,7 @@
 #include "pkt/flow_table.h"
 
 #include "test_flow_base.cc"
+
 //Ingress flow test (VMport to VMport - Same VN)
 //Flow creation using IP and TCP packets
 TEST_F(FlowTest, FlowAdd_1) {
@@ -560,86 +561,6 @@ TEST_F(FlowTest, DISABLED_Flow_entry_reuse) {
     EXPECT_TRUE(FlowTableWait(0));
     DeleteRemoteRoute("vrf5", remote_vm1_ip);
     client->WaitForIdle();
-}
-// If route changes, flows referring it must be revaluated
-TEST_F(FlowTest, FlowReval_1) {
-
-    //Create PHYSICAL interface to receive GRE packets on it.
-    PhysicalInterfaceKey key(eth_itf);
-    Interface *intf = static_cast<Interface *>
-        (agent()->interface_table()->FindActiveEntry(&key));
-    EXPECT_TRUE(intf != NULL);
-    CreateRemoteRoute("vrf5", remote_vm1_ip_subnet, remote_vm1_ip_plen,
-                      remote_router_ip, 30, "vn5");
-    client->WaitForIdle();
-    TestFlow flow[] = {
-        {
-            TestFlowPkt(Address::INET, vm1_ip, remote_vm1_ip, 1, 0, 0, "vrf5",
-                    flow0->id()),
-            {}
-        },
-        {
-            TestFlowPkt(Address::INET, remote_vm1_ip, vm1_ip, 1, 0, 0, "vrf5",
-                    remote_router_ip, 16),
-            {}
-        }
-    };
-
-    CreateFlow(flow, 1);
-    // Add reverse flow
-    CreateFlow(flow + 1, 1);
-
-    FlowEntry *fe =
-        FlowGet(VrfGet("vrf5")->vrf_id(), vm1_ip, remote_vm1_ip, 1, 0, 0,
-                GetFlowKeyNH(input[0].intf_id));
-    client->WaitForIdle();
-    EXPECT_EQ(fe->data().dest_vn_match, "vn5");
-    // Add a non-matching /32 route and verify that flow is not modified
-    client->WaitForIdle();
-    CreateRemoteRoute("vrf5", remote_vm1_ip_5, remote_router_ip, 30, "vn5_1");
-    EXPECT_EQ(fe->data().dest_vn_match, "vn5");
-    client->WaitForIdle();
-    // Add more specific route and verify that flow is updated
-    CreateRemoteRoute("vrf5", remote_vm1_ip, remote_router_ip, 30, "vn5_3");
-    EXPECT_EQ(fe->data().dest_vn_match, "vn5_3");
-    client->WaitForIdle();
-    DeleteFlow(flow, 1);
-    client->WaitForIdle();
-    DeleteRemoteRoute("vrf5", remote_vm1_ip_subnet, remote_vm1_ip_plen);
-    DeleteRemoteRoute("vrf5", remote_vm1_ip_5);
-    client->WaitForIdle();
-    DeleteRemoteRoute("vrf5", remote_vm1_ip, 32);
-    client->WaitForIdle();
-    client->WaitForIdle();
-}
-
-//Create a layer2 flow and verify that we dont add layer2 route
-//in prefix length manipulation
-TEST_F(FlowTest, WaitForTraffic) {
-    Ip4Address ip = Ip4Address::from_string(vm1_ip);
-    MacAddress mac(0, 0, 0, 1, 1, 1);
-
-    AgentRoute *ip_rt = RouteGet("vrf5", Ip4Address::from_string(vm1_ip), 32);
-    AgentRoute *evpn_Rt = EvpnRouteGet("vrf5", mac, ip, 0);
-
-    EXPECT_TRUE(ip_rt->WaitForTraffic() == true);
-    EXPECT_TRUE(evpn_Rt->WaitForTraffic() == true);
-
-    //Enqueue a flow with wrong mac address
-    TxL2Packet(flow0->id(),input[2].mac, input[1].mac,
-               input[0].addr, input[1].addr, 1);
-    client->WaitForIdle();
-    //Only IP route should goto wait for traffic
-    EXPECT_TRUE(ip_rt->WaitForTraffic() == false);
-    EXPECT_TRUE(evpn_Rt->WaitForTraffic() == true);
-
-    //Enqueue flow with right mac address
-    //EVPN route should also goto traffic seen state
-    TxL2Packet(flow0->id(),input[0].mac, input[1].mac,
-            input[0].addr, input[1].addr, 1);
-    client->WaitForIdle();
-    EXPECT_TRUE(ip_rt->WaitForTraffic() == false);
-    EXPECT_TRUE(evpn_Rt->WaitForTraffic() == false);
 }
 
 int main(int argc, char *argv[]) {

@@ -14,8 +14,7 @@ class Timer;
 class KSync;
 class FlowKey;
 struct vr_flow_entry;
-struct vr_flow_stats;
-struct KFlowData;
+struct vr_flow_entry;
 
 class KSyncFlowMemory {
 public:
@@ -40,14 +39,6 @@ public:
                                             bool ignore_active_status) const;
     const vr_flow_entry *GetValidKFlowEntry(const FlowKey &key,
                                             uint32_t idx, uint8_t gen_id) const;
-    const vr_flow_entry *GetKFlowStats(const FlowKey &key, uint32_t idx,
-                                       uint8_t gen_id,
-                                       vr_flow_stats *stats) const;
-    const vr_flow_entry *GetKFlowStatsAndInfo(const FlowKey &key,
-                                              uint32_t idx,
-                                              uint8_t gen_id,
-                                              vr_flow_stats *stats,
-                                              KFlowData *info) const;
     bool GetFlowKey(uint32_t index, FlowKey *key);
 
     uint32_t flow_table_entries_count() { return flow_table_entries_count_; }
@@ -57,7 +48,7 @@ public:
     void UnmapFlowMemTest();
     void MapSharedMemory();
     void GetFlowTableSize();
-    bool IsEvictionMarked(const vr_flow_entry *entry, uint16_t flags) const;
+    bool IsEvictionMarked(const vr_flow_entry *entry) const;
 
     KSync *ksync() const { return ksync_; }
     void set_major_devid(int id) { major_devid_ = id; }
@@ -77,8 +68,6 @@ private:
         uint64_t timeout;
     };
     void KFlow2FlowKey(const vr_flow_entry *entry, FlowKey *key) const;
-    void ReadFlowInfo(const vr_flow_entry *k_flow, vr_flow_stats *stats,
-                      KFlowData *info) const;
 
 
     KSync                   *ksync_;

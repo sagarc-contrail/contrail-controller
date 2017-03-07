@@ -46,6 +46,10 @@ class VncOpenstackTestCase(TestCase):
         setup_extra_flexmock([(keystone.Client, '__new__', get_keystone_client)])
     # end setup_flexmock
 
+    def __init__(self, *args, **kwargs):
+        super(VncOpenstackTestCase, self).__init__(*args, **kwargs)
+    # end __init__
+
     @classmethod
     def setUpClass(cls, *args, **kwargs):
         setup_extra_flexmock([(stevedore.extension.ExtensionManager, '__new__', FakeExtensionManager)])
@@ -75,16 +79,16 @@ class NeutronBackendTestCase(VncOpenstackTestCase):
 
 class KeystoneSyncTestCase(VncOpenstackTestCase):
     @classmethod
-    def setUpClass(cls, *args, **kwargs):
+    def setUpClass(cls):
         cls.setup_flexmock()
-        super(KeystoneSyncTestCase, cls).setUpClass(*args, **kwargs)
+        super(KeystoneSyncTestCase, cls).setUpClass()
     # end setUpClass
 # end class KeystoneSyncTestCase
 
 class ResourceDriverTestCase(VncOpenstackTestCase):
     @classmethod
-    def setUpClass(cls, *args, **kwargs):
+    def setUpClass(cls):
         cls.setup_flexmock()
-        super(ResourceDriverTestCase, cls).setUpClass(*args, **kwargs)
-    # end setUpClass
+        super(ResourceDriverTestCase, cls).setUpClass()
+    # end setUp
 # end class ResourceDriverTestCase

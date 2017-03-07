@@ -161,7 +161,7 @@ void NextHop::FillObjectLog(AgentLogEvent::type event,
         case AgentLogEvent::ADD:
             str.assign("Addition ");
             break;
-        case AgentLogEvent::DELETE:
+        case AgentLogEvent::DEL:
             str.assign("Deletion ");
             break;
         case AgentLogEvent::CHANGE:
@@ -202,7 +202,7 @@ void NextHop::FillObjectLogIntf(const Interface *intf,
             break;
         }
         info.set_intf_type(if_type_str);
-        info.set_intf_uuid(UuidToString(intf->GetUuid()));
+        info.set_intf_uuid(UUIDToString(intf->GetUuid()));
         info.set_intf_name(intf->name());
     }
 }
@@ -1672,9 +1672,7 @@ void CompositeNH::ChangeComponentNHKeyTunnelType(
         ComponentNHKeyList &component_nh_key_list, TunnelType::Type type) const {
 
     ComponentNHKeyList::iterator it = component_nh_key_list.begin();
-    TunnelType::Type orig_type = type;
     for (;it != component_nh_key_list.end(); it++) {
-        type = orig_type;
         if ((*it) == NULL) {
             continue;
         }
@@ -1750,12 +1748,9 @@ bool CompositeNH::GetIndex(ComponentNH &component_nh, uint32_t &idx) const {
             continue;
         }
 
-        if (it->nh() && component_nh.nh()) {
-            if (it->nh()->MatchEgressData(component_nh.nh())) {
-                return true;
-            } else if (it->nh() == component_nh.nh()) {
-                return true;
-            }
+        if (it->nh() == component_nh.nh() &&
+            it->label() == component_nh.label()) {
+            return true;
         }
         idx++;
     }

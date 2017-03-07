@@ -160,21 +160,21 @@ const list<string> BackupImplementedServices = [
 ]
 
 const map<string, string> ServicesDefaultConfigurationFile = {
-    SERVICE_VROUTER_AGENT : '/etc/contrail/contrail-vrouter-agent.conf',
-    SERVICE_CONTROL_NODE : '/etc/contrail/contrail-control.conf',
-    SERVICE_COLLECTOR : '/etc/contrail/contrail-collector.conf',
-    SERVICE_QUERY_ENGINE : '/etc/contrail/contrail-query-engine.conf',
-    SERVICE_OPSERVER : '/etc/contrail/contrail-analytics-api.conf',
-    SERVICE_ALARM_GENERATOR : '/etc/contrail/contrail-alarm-gen.conf',
-    SERVICE_SNMP_COLLECTOR : '/etc/contrail/contrail-snmp-collector.conf',
-    SERVICE_TOPOLOGY : '/etc/contrail/contrail-topology.conf',
-    SERVICE_API_SERVER : '/etc/contrail/contrail-api.conf',
-    SERVICE_DISCOVERY : '/etc/contrail/contrail-discovery.conf',
-    SERVICE_SCHEMA_TRANSFORMER : '/etc/contrail/contrail-schema.conf',
-    SERVICE_SVC_MONITOR : '/etc/contrail/contrail-svc-monitor.conf',
-    SERVICE_DEVICE_MANAGER : '/etc/contrail/contrail-device-manager.conf',
-    SERVICE_DNSD : '/etc/contrail/dns.conf',
-    SERVICE_DISCOVERY : '/etc/contrail/contrail-discovery.conf',
+    SERVICE_VROUTER_AGENT : 'contrail-vrouter-agent.conf',
+    SERVICE_CONTROL_NODE : 'contrail-control.conf',
+    SERVICE_COLLECTOR : 'contrail-collector.conf',
+    SERVICE_QUERY_ENGINE : 'contrail-query-engine.conf',
+    SERVICE_OPSERVER : 'contrail-analytics-api.conf',
+    SERVICE_ALARM_GENERATOR : 'contrail-alarm-gen.conf',
+    SERVICE_SNMP_COLLECTOR : 'contrail-snmp-collector.conf',
+    SERVICE_TOPOLOGY : 'contrail-topology.conf',
+    SERVICE_API_SERVER : 'contrail-api.conf',
+    SERVICE_DISCOVERY : 'contrail-discovery.conf',
+    SERVICE_SCHEMA_TRANSFORMER : 'contrail-schema.conf',
+    SERVICE_SVC_MONITOR : 'contrail-svc-monitor.conf',
+    SERVICE_DEVICE_MANAGER : 'contrail-device-manager.conf',
+    SERVICE_DNSD : 'dns.conf',
+    SERVICE_DISCOVERY : 'contrail-discovery.conf',
 }
 
 enum Module {
@@ -241,7 +241,7 @@ const string MODULE_ALARM_GENERATOR_NAME = SERVICE_ALARM_GENERATOR
 const string MODULE_COLLECTOR_NAME = SERVICE_COLLECTOR
 const string MODULE_QUERY_ENGINE_NAME = SERVICE_QUERY_ENGINE
 const string MODULE_SVC_MONITOR_NAME = SERVICE_SVC_MONITOR
-const string MODULE_DEVICE_MANAGER_NAME = "contrail-device-manager"
+const string MODULE_DEVICE_MANAGER_NAME = "DeviceManager"
 const string MODULE_DNS_NAME = "contrail-dns"
 const string MODULE_DISCOVERY_SERVICE_NAME = "contrail-discovery"
 const string MODULE_IFMAP_SERVER_NAME = "IfmapServer"
@@ -331,15 +331,6 @@ enum NodeType {
     DATABASE,
     OPENSTACK,
     SERVERMGR,
-}
-
-const map<NodeType, string> UVENodeTypeNames = {
-    NodeType.INVALID         : "Invalid",
-    NodeType.CONFIG          : "config-node",
-    NodeType.CONTROL         : "control-node",
-    NodeType.ANALYTICS       : "analytics-node",
-    NodeType.COMPUTE         : "vrouter",
-    NodeType.DATABASE        : "database-node",
 }
 
 const map<NodeType, string> NodeTypeNames = {

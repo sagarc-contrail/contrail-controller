@@ -29,11 +29,6 @@ except:
         SYSTEM = 1
         TRACE = 4
 from requests.auth import HTTPBasicAuth
-try:
-    from collections import OrderedDict
-except ImportError:
-    # python 2.6 or earlier, use backport
-    from ordereddict import OrderedDict
 
 def enum(**enums):
     return type('Enum', (), enums)
@@ -79,13 +74,12 @@ class ServicePoller(gevent.Greenlet):
                     disc_trace = self.trace_cls()
                     disc_trace.publishers = []
                     for svc in slist:
-                        selem = OrderedDict(sorted(svc.items()))
-                        svc_list.append(selem)
-                        disc_trace.publishers.append(str(selem))
+                        svc_list.append(svc)
+                        disc_trace.publishers.append(str(svc))
                     disc_trace.trace_msg(name='DiscoveryMsg', sandesh = self.snh)
-                    if old_list != sorted(svc_list):
+                    if old_list != svc_list:
                         self.callbk(svc_list)
-                    old_list = copy.deepcopy(sorted(svc_list))
+                    old_list = copy.deepcopy(svc_list)
          
             gevent.sleep(10)
 

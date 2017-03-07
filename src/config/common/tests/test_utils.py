@@ -4,8 +4,6 @@
 import gevent
 import gevent.queue
 import gevent.wsgi
-import gevent.monkey
-gevent.monkey.patch_all()
 import os
 import sys
 import logging
@@ -29,7 +27,6 @@ except ImportError:
 import pycassa
 import Queue
 from collections import deque
-from collections import namedtuple
 import kombu
 import kazoo
 from kazoo.client import KazooState
@@ -73,53 +70,27 @@ class FakeWSGIHandler(gevent.wsgi.WSGIHandler):
         server.log = LoggerWriter()
 
 class FakeSystemManager(object):
-    _keyspaces = {}
+    _keyspaces = []
 
     def __init__(*args, **kwargs):
         pass
 
     def create_keyspace(self, name, *args, **kwargs):
         if name not in self._keyspaces:
-            self._keyspaces[name] = {}
+            self._keyspaces.append(name)
 
     def list_keyspaces(self):
-        return self._keyspaces.keys()
+        return self._keyspaces
 
     def get_keyspace_properties(self, ks_name):
         return {'strategy_options': {'replication_factor': '1'}}
 
-    def get_keyspace_column_families(self, keyspace):
-        return self._keyspaces[keyspace]
-
-    def create_column_family(self, keyspace, name, *args, **kwargs):
-        self._keyspaces[keyspace][name] = {}
+    def create_column_family(self, *args, **kwargs):
+        pass
 
     def drop_keyspace(self, ks_name):
-        try:
-            del self._keyspaces[name]
-        except KeyError:
-            pass
-
-    @classmethod
-    @contextlib.contextmanager
-    def patch_keyspace(cls, ks_name, ks_val=None):
-        try:
-            orig_ks_val = cls._keyspaces[ks_name]
-            orig_existed = True
-        except KeyError:
-            orig_existed = False
-
-        try:
-            cls._keyspaces[ks_name] = ks_val
-            yield
-        finally:
-            if orig_existed:
-                cls._keyspaces[ks_name] = orig_ks_val
-            else:
-                del cls._keyspaces[ks_name]
-    #end patch_keyspace
-# end class FakeSystemManager
-
+        if name in self._keyspaces:
+            self._keyspaces.remove(name)
 
 class CassandraCFs(object):
     _all_cfs = {}
@@ -274,8 +245,7 @@ class FakeCF(object):
         if key not in self._rows:
             self._rows[key] = {}
 
-        #tstamp = datetime.now()
-        tstamp = (datetime.utcnow() - datetime(1970, 1, 1)).total_seconds()
+        tstamp = datetime.now()
         for col_name in col_dict.keys():
             self._rows[key][col_name] = (col_dict[col_name], tstamp, ttl)
 
@@ -331,16 +301,6 @@ class FakeCF(object):
     def send(self):
         pass
     # end send
-
-    @contextlib.contextmanager
-    def patch_cf(self, new_contents=None):
-        orig_contents = self._rows
-        try:
-            self._rows = new_contents
-            yield
-        finally:
-            self._rows = orig_contents
-    # end patch_cf
 
     @contextlib.contextmanager
     def patch_row(self, key, new_columns=None):
@@ -1125,15 +1085,6 @@ class FakeAuthProtocol(object):
         rval = json.loads(token_info)
         return rval
 
-    # simulate keystone token
-    def _fake_keystone_token(self, token_info):
-        rval = json.loads(token_info)
-        rval['token'] = {};
-        rval['access'] = {}; rval['access']['user'] = {};
-        rval['access']['user']['roles'] = [{'name': rval['X-Role']}]
-        rval['token']['roles'] = [{'name': rval['X-Role']}]
-        return rval
-
     def _reject_request(self, env, start_response):
         """Redirect client to auth server.
 
@@ -1167,7 +1118,7 @@ class FakeAuthProtocol(object):
             return self._reject_request(env, start_response)
 
         token_info = self._validate_user_token(user_token, env)
-        env['keystone.token_info'] = self._fake_keystone_token(token_info)
+        env['keystone.token_info'] = token_info
         user_headers = self._build_user_headers(token_info)
         self._add_headers(env, user_headers)
         return self.app(env, start_response)
@@ -1206,9 +1157,6 @@ class FakeKeystoneClient(object):
             self.id = id
             self.name = name
             self._tenants[id] = self
-
-        def delete_tenant(self, id):
-            del self._tenants[id]
 
         def create(self, name, id=None):
             self.name = name
@@ -1308,20 +1256,13 @@ def Fake_uuid_to_time(time_uuid_in_db):
     return ts
 # end of Fake_uuid_to_time
 
-
-class ZnodeStat(namedtuple('ZnodeStat', 'ctime')):
-    pass
-
-def zk_scrub_path(path):
-    # remove trailing slashes if not root
-    if len(path) == 1:
-        return path
-    return path.rstrip('/')
-# end zk_scrub_path
+class ZnodeStat(object):
+    def __init__(self, ctime):
+        self.ctime = ctime
+# end ZnodeStat
 
 class FakeKazooClient(object):
     _values = {}
-
     class Election(object):
         __init__ = stub
         def run(self, cb, *args, **kwargs):
@@ -1348,28 +1289,24 @@ class FakeKazooClient(object):
     # end stop
 
     def create(self, path, value='', *args, **kwargs):
-        scrubbed_path = zk_scrub_path(path)
-        if scrubbed_path in self._values:
+        if path in self._values:
             raise ResourceExistsError(
-                path, str(self._values[scrubbed_path][0]), 'zookeeper')
-        self._values[scrubbed_path] = (value, ZnodeStat(time.time()*1000))
+                path, str(self._values[path][0]), 'zookeeper')
+        self._values[path] = (value, ZnodeStat(time.time()*1000))
     # end create
 
     def get(self, path):
-        return self._values[zk_scrub_path(path)]
+        return self._values[path]
     # end get
 
     def get_children(self, path):
-        if not path:
-            return []
-
         children = set()
-        scrubbed_path = zk_scrub_path(path)
         for node in self._values:
-            if node.startswith(scrubbed_path):
+            if node.startswith(path):
                 # return non-leading '/' in name
-                child_node = node[len(scrubbed_path):]
+                child_node = node[len(path):]
                 if not child_node:
+                    children.add(child_node)
                     continue
                 if child_node[0] == '/':
                     child_node = child_node[1:]
@@ -1378,64 +1315,44 @@ class FakeKazooClient(object):
     # end get_children
 
     def exists(self, path):
-        scrubbed_path = zk_scrub_path(path)
-        if scrubbed_path in self._values:
-            return self._values[scrubbed_path]
+        if path in self._values:
+            return self._values[path]
+        else:
+            for node in self._values:
+                if node.startswith(path):
+                    return self._values[node]
         return None
     # end exists
 
     def delete(self, path, recursive=False):
-        scrubbed_path = zk_scrub_path(path)
         if not recursive:
             try:
-                del self._values[scrubbed_path]
+                del self._values[path]
             except KeyError:
                 raise kazoo.exceptions.NoNodeError()
         else:
             for path_key in self._values.keys():
-                if scrubbed_path in path_key:
+                if path in path_key:
                     del self._values[path_key]
     # end delete
 
     @contextlib.contextmanager
     def patch_path(self, path, new_values=None, recursive=True):
-        # if recursive is False, new_values is value at path
-        # if recursive is True, new_values is dict((path,path-val))
-
-        scrubbed_path = zk_scrub_path(path)
         orig_nodes = {}
-        paths_to_patch = []
-        # collect path(s) to patch...
-        for node in self._values.keys():
-            if recursive: # simulate wipe of node with path and descendants
-                if node.startswith(scrubbed_path):
-                    paths_to_patch.append(node)
-            else: # only one path
-                if node == scrubbed_path:
-                    paths_to_patch = [node]
-                    break
-
-        # ...and patch it
-        for path in paths_to_patch:
-            orig_nodes[path] = self._values[path]
-            if recursive:
-                if new_values and path in new_values:
-                    self._values[path] = new_values[path]
-                else:
-                    del self._values[path]
-            else: # only one path
-                if new_values is None:
-                    del self._values[path]
-                else:
-                    self._values[path] = new_values
-                break
-
+        if not new_values and recursive:
+            # simulate wipe of entire node with path and its descendants
+            for node in self._values.keys():
+                if not node.startswith(path):
+                    continue
+                orig_nodes[node] = self._values[node]
+                del self._values[node]
         try:
             yield
         finally:
-            for node in orig_nodes:
-                self._values[node] = orig_nodes[node]
-    #end patch_path
+            if not new_values and recursive:
+                for node in orig_nodes:
+                    self._values[node] = orig_nodes[node]
+    #end patch_row
 # end class FakeKazooClient
 
 

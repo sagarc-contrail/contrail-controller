@@ -13,7 +13,7 @@ from kazoo.retry import KazooRetry
 
 from bitarray import bitarray
 from cfgm_common.exceptions import ResourceExhaustionError, ResourceExistsError
-from gevent.lock import BoundedSemaphore
+from gevent.coros import BoundedSemaphore
 
 import uuid
 
@@ -220,7 +220,7 @@ class IndexAllocator(object):
 
 class ZookeeperClient(object):
 
-    def __init__(self, module, server_list, logging_fn=None, zk_timeout=400):
+    def __init__(self, module, server_list, logging_fn=None):
         # logging
         logger = logging.getLogger(module)
         logger.setLevel(logging.DEBUG)
@@ -245,7 +245,7 @@ class ZookeeperClient(object):
                                  sleep_func=gevent.sleep)
         self._zk_client = kazoo.client.KazooClient(
                 server_list,
-                timeout=zk_timeout,
+                timeout=400,
                 handler=kazoo.handlers.gevent.SequentialGeventHandler(),
                 logger=logger,
                 connection_retry=self._retry,

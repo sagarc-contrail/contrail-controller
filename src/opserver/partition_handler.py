@@ -4,7 +4,7 @@ from gevent import monkey
 monkey.patch_all()
 import logging
 import gevent
-from gevent.lock import BoundedSemaphore
+from gevent.coros import BoundedSemaphore
 from kafka import KafkaClient, KeyedProducer, SimpleConsumer, common
 from uveserver import UVEServer
 import os
@@ -18,7 +18,6 @@ import discoveryclient.client as client
 from pysandesh.util import UTCTimestampUsec
 import select
 import redis
-import errno
 from collections import namedtuple
 
 PartInfo = namedtuple("PartInfo",["ip_address","instance_id","acq_time","port"])
@@ -578,11 +577,11 @@ class PartitionHandler(gevent.Greenlet):
                     gevent.sleep(2)
                     pause = False
                 self._logger.error("New KafkaClient %s" % self._topic)
-                self._kfk = KafkaClient(self._brokers , "kc-" + self._topic, timeout=5)
+                self._kfk = KafkaClient(self._brokers , "kc-" + self._topic, timeout=2)
                 self._failed = False
                 try:
-                    consumer = SimpleConsumer(self._kfk, self._group, self._topic,\
-                            buffer_size = 4096*4*4, max_buffer_size=4096*32*4)
+                    consumer = SimpleConsumer(self._kfk, self._group, self._topic, buffer_size = 4096*4, max_buffer_size=4096*32)
+                    #except:
                 except Exception as ex:
                     template = "Consumer Failure {0} occured. Arguments:\n{1!r}"
                     messag = template.format(type(ex).__name__, ex.args)
@@ -618,6 +617,7 @@ class PartitionHandler(gevent.Greenlet):
                         mlist = consumer.get_messages(10,timeout=0.5)
                         if not self.msg_handler(mlist):
                             raise gevent.GreenletExit
+                        consumer.commit()
                         pcount += len(mlist) 
                     except TypeError as ex:
                         self._logger.error("Type Error: %s trace %s" % \
@@ -639,10 +639,6 @@ class PartitionHandler(gevent.Greenlet):
                 self.stop_partition()
 		self._failed = True
                 pause = True
-                if hasattr(ex,'errno'):
-                    # This is an unrecoverable error
-                    if ex.errno == errno.EMFILE:
-                       raise SystemExit(1)
 
         self._logger.error("Stopping %s pcount %d" % (self._topic, pcount))
         partdb = self.stop_partition()

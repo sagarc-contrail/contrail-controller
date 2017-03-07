@@ -4,7 +4,6 @@
 
 
 import gevent
-import json
 from pprint import pformat
 
 from vnc_api.vnc_api import VncApi
@@ -48,28 +47,13 @@ class ConfigHandler(object):
             self._rabbitmq_info['port'], self._rabbitmq_info['user'],
             self._rabbitmq_info['password'], self._rabbitmq_info['vhost'],
             self._rabbitmq_info['ha_mode'], rabbitmq_qname,
-            self._rabbitmq_subscribe_callback, self._logger,
-            rabbit_use_ssl=self._rabbitmq_info['use_ssl'],
-            kombu_ssl_version=self._rabbitmq_info['ssl_version'],
-            kombu_ssl_keyfile=self._rabbitmq_info['ssl_keyfile'],
-            kombu_ssl_certfile=self._rabbitmq_info['ssl_certfile'],
-            kombu_ssl_ca_certs=self._rabbitmq_info['ssl_ca_certs'])
+            self._rabbitmq_subscribe_callback, self._logger)
     # end start
 
     def stop(self):
         if self._api_client_connection_task:
             self._api_client_connection_task.kill()
     # end stop
-
-    def obj_to_dict(self, obj):
-        def to_json(obj):
-            if hasattr(obj, 'serialize_to_json'):
-                return obj.serialize_to_json()
-            else:
-                return dict((k, v) for k, v in obj.__dict__.iteritems())
-
-        return json.loads(json.dumps(obj, default=to_json))
-    # end obj_to_dict
 
     # Private methods
 

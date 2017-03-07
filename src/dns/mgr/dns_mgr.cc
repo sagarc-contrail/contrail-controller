@@ -1,7 +1,8 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
-
+#include <boost/asio.hpp>
+#include <windows.h>
 #include <base/contrail_ports.h>
 #include <cmn/dns.h>
 #include <bind/bind_util.h>
@@ -683,7 +684,6 @@ void DnsManager::BindEventHandler(BindStatus::Event event) {
             DNS_OPERATIONAL_LOG(
                 g_vns_constants.CategoryNames.find(Category::DNSAGENT)->second,
                 SandeshLevel::SYS_NOTICE, "BIND named up; DNS is operational");
-            ClearDeportedPendingList();
             UpdateAll();
             break;
         }

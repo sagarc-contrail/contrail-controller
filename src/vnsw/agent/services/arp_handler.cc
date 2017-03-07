@@ -234,7 +234,7 @@ bool ArpHandler::HandleMessage() {
             ArpEntry *entry = arp_proto->FindArpEntry(ipc->key);
             if (!entry) {
                 entry = new ArpEntry(io_, this, ipc->key, ipc->key.vrf,
-                                     ArpEntry::INITING, ipc->interface.get());
+                                     ArpEntry::INITING, ipc->interface);
                 if (arp_proto->AddArpEntry(entry) == false) {
                     delete entry;
                     break;
@@ -248,18 +248,14 @@ bool ArpHandler::HandleMessage() {
         }
 
         case ArpProto::ARP_SEND_GRATUITOUS: {
-            bool key_valid = false;
-            ArpProto::ArpIterator it =
-            arp_proto->GratiousArpEntryIterator(ipc->key, &key_valid);
-            if (key_valid && !ipc->interface->IsDeleted()) {
-                if (it->second == NULL) {
-                    it->second = new ArpEntry(io_, this, ipc->key, ipc->key.vrf,
-                                              ArpEntry::ACTIVE, ipc->interface.get());
-                    ret = false;
-                }
-                it->second->SendGratuitousArp();
-                break;
+            if (!arp_proto->gratuitous_arp_entry()) {
+                arp_proto->set_gratuitous_arp_entry(
+                           new ArpEntry(io_, this, ipc->key, ipc->key.vrf,
+                                        ArpEntry::ACTIVE, ipc->interface));
+                ret = false;
             }
+            arp_proto->gratuitous_arp_entry()->SendGratuitousArp();
+            break;
         }
 
         case ArpProto::ARP_DELETE: {
@@ -284,15 +280,8 @@ bool ArpHandler::HandleMessage() {
         }
 
         case ArpProto::GRATUITOUS_TIMER_EXPIRED: {
-            ArpEntry *entry = arp_proto->GratiousArpEntry(ipc->key);
-            if (entry && entry->retry_count() <= ArpProto::kGratRetries) {
-                entry->SendGratuitousArp();
-            } else {
-                // Need to validate deleting the Arp entry upon fabric vrf Delete only
-                if (ipc->key.vrf->GetName() != agent()->fabric_vrf_name()) {
-                    arp_proto->DeleteGratuitousArpEntry(entry);
-                }
-            }
+           if (arp_proto->gratuitous_arp_entry())
+               arp_proto->gratuitous_arp_entry()->SendGratuitousArp();
             break;
         }
 
@@ -331,8 +320,8 @@ uint16_t ArpHandler::ArpHdr(const MacAddress &smac, in_addr_t sip,
 }
 
 void ArpHandler::SendArp(uint16_t op, const MacAddress &smac, in_addr_t sip,
-                         const MacAddress &tmac, const MacAddress &dmac,
-                         in_addr_t tip, uint32_t itf, uint32_t vrf) {
+                         const MacAddress &tmac, in_addr_t tip,
+                         uint32_t itf, uint32_t vrf) {
 
     if (pkt_info_->packet_buffer() == NULL) {
         pkt_info_->AllocPacketBuffer(agent(), PktHandler::ARP, ARP_TX_BUFF_LEN,
@@ -343,7 +332,8 @@ void ArpHandler::SendArp(uint16_t op, const MacAddress &smac, in_addr_t sip,
     memset(buf, 0, pkt_info_->packet_buffer()->data_len());
     pkt_info_->eth = (struct ether_header *)buf;
     int l2_len = EthHdr(buf, pkt_info_->packet_buffer()->data_len(),
-                        itf, smac, dmac, ETHERTYPE_ARP);
+                        itf, smac, MacAddress::BroadcastMac(), ETHERTYPE_ARP);
+
     arp_ = pkt_info_->arp = (ether_arp *) (buf + l2_len);
     arp_tpa_ = tip;
 

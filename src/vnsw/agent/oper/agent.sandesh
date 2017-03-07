@@ -93,7 +93,6 @@ struct StaticRouteSandesh {
    3: i32    prefix;
    4: optional string mac_addr;
    5: optional list<string> communities;
-   6: optional u32 label;
 }
 
 /**
@@ -352,7 +351,7 @@ struct PathPreferenceSandeshData {
     1: i32 sequence;
     2: i32 preference;
     3: bool ecmp;
-    4: optional bool wait_for_traffic;
+    4: bool wait_for_traffic;
     5: optional string dependent_ip;
 }
 
@@ -1036,7 +1035,6 @@ traceobject sandesh PathPreferenceTrace {
     5: string state;
     6: i32 retry_timeout;
     7: string dependent_ip;
-    8: i32 flap_count;
 }
 
 /**
@@ -1330,7 +1328,7 @@ request sandesh UnresolvedRoute {
  */
 enum AgentLogEvent {
     ADD,
-    DELETE,
+    DEL,
     CHANGE,
     DELETE_TRIGGER,
     RESYNC

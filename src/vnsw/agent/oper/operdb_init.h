@@ -26,8 +26,6 @@ class GlobalQosConfig;
 
 class OperDB {
 public:
-    static const uint16_t max_linklocal_addresses = 65535;
-
     OperDB(Agent *agent);
     virtual ~OperDB();
 

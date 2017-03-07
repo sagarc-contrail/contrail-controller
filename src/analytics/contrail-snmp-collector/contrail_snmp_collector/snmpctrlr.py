@@ -2,7 +2,7 @@
 # Copyright (c) 2015 Juniper Networks, Inc. All rights reserved.
 #
 from gevent.queue import Queue as GQueue
-from gevent.lock import Semaphore
+from gevent.coros import Semaphore
 import os, json, sys, subprocess, time, gevent, socket
 from tempfile import NamedTemporaryFile, mkdtemp
 import cPickle as pickle

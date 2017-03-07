@@ -403,17 +403,16 @@ class CassStatementNameBinder : public boost::static_visitor<> {
     CassStatement *statement_;
 };
 
-static const char * kQCompactionStrategy(
+static const std::string kQCompactionStrategy(
     "compaction = {'class': "
-    "'org.apache.cassandra.db.compaction.%s'}");
+    "'org.apache.cassandra.db.compaction.LeveledCompactionStrategy'}");
 static const std::string kQGCGraceSeconds("gc_grace_seconds = 0");
 
 //
 // Cf2CassCreateTableIfNotExists
 //
 
-std::string StaticCf2CassCreateTableIfNotExists(const GenDb::NewCf &cf,
-    const std::string &compaction_strategy) {
+std::string StaticCf2CassCreateTableIfNotExists(const GenDb::NewCf &cf) {
     std::ostringstream query;
     // Table name
     query << "CREATE TABLE IF NOT EXISTS " << cf.cfname_ << " ";
@@ -430,17 +429,12 @@ std::string StaticCf2CassCreateTableIfNotExists(const GenDb::NewCf &cf,
         query << ", \"" << column.first << "\" " <<
             DbDataType2CassType(column.second);
     }
-    char cbuf[512];
-    int n(snprintf(cbuf, sizeof(cbuf), kQCompactionStrategy,
-       compaction_strategy.c_str()));
-    assert(!(n < 0 || n >= (int)sizeof(cbuf)));
-    query << ") WITH " << std::string(cbuf) << " AND " <<
+    query << ") WITH " << kQCompactionStrategy << " AND " <<
         kQGCGraceSeconds;
     return query.str();
 }
 
-std::string DynamicCf2CassCreateTableIfNotExists(const GenDb::NewCf &cf,
-    const std::string &compaction_strategy) {
+std::string DynamicCf2CassCreateTableIfNotExists(const GenDb::NewCf &cf) {
     std::ostringstream query;
     // Table name
     query << "CREATE TABLE IF NOT EXISTS " << cf.cfname_ << " (";
@@ -492,11 +486,7 @@ std::string DynamicCf2CassCreateTableIfNotExists(const GenDb::NewCf &cf,
         }
         query << "column" << cnum;
     }
-    char cbuf[512];
-    int n(snprintf(cbuf, sizeof(cbuf), kQCompactionStrategy,
-       compaction_strategy.c_str()));
-    assert(!(n < 0 || n >= (int)sizeof(cbuf)));
-    query << ")) WITH " << std::string(cbuf) << " AND " <<
+    query << ")) WITH " << kQCompactionStrategy << " AND " <<
         kQGCGraceSeconds;
     return query.str();
 }
@@ -1342,7 +1332,7 @@ class CqlIf::CqlIfImpl {
     }
 
     bool CreateTableIfNotExistsSync(const GenDb::NewCf &cf,
-        const std::string &compaction_strategy, CassConsistency consistency) {
+        CassConsistency consistency) {
         if (session_state_ != SessionState::CONNECTED) {
             return false;
         }
@@ -1352,12 +1342,10 @@ class CqlIf::CqlIfImpl {
         std::string query;
         switch (cf.cftype_) {
           case GenDb::NewCf::COLUMN_FAMILY_SQL:
-            query = impl::StaticCf2CassCreateTableIfNotExists(cf,
-                compaction_strategy);
+            query = impl::StaticCf2CassCreateTableIfNotExists(cf);
             break;
           case GenDb::NewCf::COLUMN_FAMILY_NOSQL:
-            query = impl::DynamicCf2CassCreateTableIfNotExists(cf,
-                compaction_strategy);
+            query = impl::DynamicCf2CassCreateTableIfNotExists(cf);
             break;
           default:
             return false;
@@ -1819,11 +1807,9 @@ bool CqlIf::Db_SetTablespace(const std::string &tablespace) {
 }
 
 // Column family
-bool CqlIf::Db_AddColumnfamily(const GenDb::NewCf &cf,
-    const std::string &compaction_strategy) {
+bool CqlIf::Db_AddColumnfamily(const GenDb::NewCf &cf) {
     bool success(
-        impl_->CreateTableIfNotExistsSync(cf, compaction_strategy,
-            CASS_CONSISTENCY_QUORUM));
+        impl_->CreateTableIfNotExistsSync(cf, CASS_CONSISTENCY_QUORUM));
     if (!success) {
         IncrementTableWriteFailStats(cf.cfname_);
         IncrementErrors(GenDb::IfErrors::ERR_WRITE_COLUMN_FAMILY);

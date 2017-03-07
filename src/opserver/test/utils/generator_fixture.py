@@ -400,8 +400,7 @@ class GeneratorFixture(fixtures.Fixture):
         vn_uve.send(sandesh=self._sandesh_instance)
     # end send_vn_config_uve
 
-    def send_vrouterinfo(self, name, b_info = False, deleted = False,
-                         non_ascii = False):
+    def send_vrouterinfo(self, name, b_info = False, deleted = False):
         vinfo = None
 
         if deleted:
@@ -409,11 +408,8 @@ class GeneratorFixture(fixtures.Fixture):
                                  deleted = True)
         else:
             if b_info:
-                build_info="testinfo"
-                if non_ascii:
-                    build_info += ' ' + chr(201) + chr(203) + chr(213) + ' ' + build_info
                 vinfo = VrouterAgent(name=name,
-                                     build_info=build_info,
+                                     build_info="testinfo",
                                      state="OK")
             else:
                 vinfo = VrouterAgent(name=name, state="OK")

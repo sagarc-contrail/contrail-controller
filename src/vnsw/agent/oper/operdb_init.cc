@@ -107,8 +107,7 @@ void OperDB::CreateDBTables(DB *db) {
     intf_table->set_agent(agent_);
 
     // Allocate Range to be used for MetaDataIPAllocator
-    agent_->set_metadata_ip_allocator(
-            new MetaDataIpAllocator(agent_, 1, max_linklocal_addresses - 1));
+    agent_->set_metadata_ip_allocator(new MetaDataIpAllocator(agent_, 1, 8192));
 
     HealthCheckTable *hc_table;
     hc_table =

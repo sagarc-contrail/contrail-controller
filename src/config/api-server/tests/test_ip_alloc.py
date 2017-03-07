@@ -2,8 +2,6 @@
 # Copyright (c) 2013,2014 Juniper Networks, Inc. All rights reserved.
 #
 import gevent
-import gevent.monkey
-gevent.monkey.patch_all()
 import os
 import sys
 import socket
@@ -11,6 +9,9 @@ import errno
 import uuid
 import logging
 import coverage
+
+import cgitb
+cgitb.enable(format='text')
 
 import testtools
 from testtools.matchers import Equals, MismatchError, Not, Contains
@@ -29,8 +30,6 @@ from vnc_api.vnc_api import *
 import vnc_api.gen.vnc_api_test_gen
 from vnc_api.gen.resource_test import *
 import cfgm_common
-from cfgm_common import vnc_cgitb
-vnc_cgitb.enable(format='text')
 
 sys.path.append('../common/tests')
 from test_utils import *
@@ -1046,14 +1045,14 @@ class TestIpAlloc(test_case.ApiServerTestCase):
                 self._invoked = 0
             # end __init__
 
-            def __call__(self, _, *args, **kwargs):
+            def __call__(self, *args, **kwargs):
                 if self._invoked >= 1:
                     raise Exception(
                         "Instance IP was persisted more than once")
 
-                if args[0].startswith('/api-server/subnets'):
+                if args[1].startswith('/api-server/subnets'):
                     self._invoked += 1
-                return self._orig_method(*args, **kwargs)
+                return self._orig_method(args, kwargs)
         # end SpyCreateNode
 
         orig_object = self._api_server._db_conn._zk_db._zk_client

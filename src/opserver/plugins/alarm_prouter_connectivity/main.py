@@ -23,6 +23,25 @@ class ProuterConnectivity(AlarmBase):
                     },
                     {
                         'operand1': 'ProuterData.connected_agent_list',
+                        'operation': '==',
+                        'operand2': {
+                            'json_value': 'null'
+                        }
+                    }
+                ]
+            },
+            {
+                'and_list': [
+                    {
+                        'operand1': 'ContrailConfig.elements.' + \
+                            'virtual_router_refs',
+                        'operation': '!=',
+                        'operand2': {
+                            'json_value': 'null'
+                        }
+                    },
+                    {
+                        'operand1': 'ProuterData.connected_agent_list',
                         'operation': 'size!=',
                         'operand2': {
                             'json_value': '1'

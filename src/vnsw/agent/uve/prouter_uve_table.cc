@@ -6,9 +6,6 @@
 #include <uve/prouter_uve_table.h>
 #include <uve/agent_uve_base.h>
 
-SandeshTraceBufferPtr ProuterUveTraceBuf(SandeshTraceBufferCreate
-                                         ("ProuterUve", 500));
-
 ProuterUveTable::ProuterUveTable(Agent *agent, uint32_t default_intvl)
     : uve_prouter_map_(), uve_phy_interface_map_(), agent_(agent),
       physical_device_listener_id_(DBTableBase::kInvalidId),
@@ -352,7 +349,7 @@ void ProuterUveTable::FrameProuterMsg(ProuterUveEntry *entry,
                                       ProuterData *uve) const {
     vector<string> phy_if_list;
     vector<string> logical_list;
-    vector<string> empty_agent_list;
+    vector<string> connected_agent_list;
     /* We are using hostname instead of fq-name because Prouter UVE sent by
      * other modules to send topology information uses hostname and we want
      * both these information to be seen in same UVE */
@@ -376,20 +373,11 @@ void ProuterUveTable::FrameProuterMsg(ProuterUveEntry *entry,
     }
     uve->set_logical_interface_list(logical_list);
     if (entry->mastership_) {
-        vector<string> agent_list;
-        agent_list.push_back(agent_->agent_name());
-        if (agent_->tsn_enabled()) {
-            uve->set_tsn_agent_list(agent_list);
-        } else if (agent_->tor_agent_enabled()) {
-            uve->set_connected_agent_list(agent_list);
-        }
+        connected_agent_list.push_back(agent_->agent_name());
+        uve->set_connected_agent_list(connected_agent_list);
     } else {
         /* Send Empty list */
-        if (agent_->tsn_enabled()) {
-            uve->set_tsn_agent_list(empty_agent_list);
-        } else if (agent_->tor_agent_enabled()) {
-            uve->set_connected_agent_list(empty_agent_list);
-        }
+        uve->set_connected_agent_list(connected_agent_list);
     }
 }
 
@@ -880,12 +868,6 @@ void ProuterUveTable::UpdateMastership(const boost::uuids::uuid &u, bool value)
 {
     ProuterUveEntry *entry = PDEntryToProuterUveEntry(u);
     if (entry == NULL) {
-        string status = " false";
-        if (value) {
-            status.assign(" true");
-        }
-        string msg = "Mastership update failed for " + to_string(u) + status;
-        PROUTER_UVE_TRACE(msg);
         return;
     }
     if (entry->mastership_ != value) {

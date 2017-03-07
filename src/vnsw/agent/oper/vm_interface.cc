@@ -1,6 +1,8 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
+#include <boost/asio.hpp>
+#include <windows.h>
 
 #include <sys/types.h>
 #include <net/ethernet.h>
@@ -60,8 +62,8 @@ VmInterface::VmInterface(const boost::uuids::uuid &uuid) :
     primary_ip6_addr_(), vm_mac_(MacAddress::kZeroMac), policy_enabled_(false),
     mirror_entry_(NULL), mirror_direction_(MIRROR_RX_TX), cfg_name_(""),
     fabric_port_(true), need_linklocal_ip_(false), drop_new_flows_(false),
-    dhcp_enable_(true), do_dhcp_relay_(false), proxy_arp_mode_(PROXY_ARP_NONE),
-    vm_name_(), vm_project_uuid_(nil_uuid()), vxlan_id_(0), bridging_(false),
+    dhcp_enable_(true), do_dhcp_relay_(false), vm_name_(),
+    vm_project_uuid_(nil_uuid()), vxlan_id_(0), bridging_(false),
     layer3_forwarding_(true), flood_unknown_unicast_(false),
     mac_set_(false), ecmp_(false), ecmp6_(false), disable_policy_(false),
     tx_vlan_id_(kInvalidVlanId), rx_vlan_id_(kInvalidVlanId), parent_(NULL),
@@ -99,8 +101,8 @@ VmInterface::VmInterface(const boost::uuids::uuid &uuid,
     primary_ip6_addr_(a6), vm_mac_(mac), policy_enabled_(false),
     mirror_entry_(NULL), mirror_direction_(MIRROR_RX_TX), cfg_name_(""),
     fabric_port_(true), need_linklocal_ip_(false), drop_new_flows_(false),
-    dhcp_enable_(true), do_dhcp_relay_(false), proxy_arp_mode_(PROXY_ARP_NONE),
-    vm_name_(vm_name), vm_project_uuid_(vm_project_uuid), vxlan_id_(0),
+    dhcp_enable_(true), do_dhcp_relay_(false), vm_name_(vm_name),
+    vm_project_uuid_(vm_project_uuid), vxlan_id_(0),
     bridging_(false), layer3_forwarding_(true),
     flood_unknown_unicast_(false), mac_set_(false),
     ecmp_(false), ecmp6_(false), disable_policy_(false),
@@ -536,33 +538,6 @@ static void BuildVrfAndServiceVlanInfo(Agent *agent,
     return;
 }
 
-// Build proxy-arp flag on VMI
-// In future, we expect a proxy-arp flag on VMI. In the meanwhile, we want
-// to enable proxy-arp on following,
-// 1. Left and right interface of transparent service-chain
-// 2. Left and right interface of in-network service-chain
-// 3. Left interface of in-network-nat service-chain
-//
-// The common attribute for all these interface are,
-// - They have vrf-assign rules
-// - They have service-interface-type attribute
-//
-// Note: Right interface of in-network-nat will not have vrf-assign
-static void BuildProxyArpFlags(Agent *agent, VmInterfaceConfigData *data,
-                               VirtualMachineInterface *cfg) {
-    data->proxy_arp_mode_ = VmInterface::PROXY_ARP_NONE;
-    if (cfg->vrf_assign_table().size() == 0)
-        return;
-
-    // Proxy-mode valid only on left or right interface os SI
-    if (cfg->properties().service_interface_type != "left" &&
-        cfg->properties().service_interface_type != "right") {
-        return;
-    }
-
-    data->proxy_arp_mode_ = VmInterface::PROXY_ARP_UNRESTRICTED;
-}
-
 static void BuildFatFlowTable(Agent *agent, VmInterfaceConfigData *data,
                               IFMapNode *node) {
     VirtualMachineInterface *cfg = static_cast <VirtualMachineInterface *>
@@ -703,11 +678,11 @@ static void BuildVn(VmInterfaceConfigData *data, IFMapNode *node,
     if (cfg_entry && (cfg_entry->GetVnUuid() != data->vn_uuid_)) {
         IFMAP_ERROR(InterfaceConfiguration, 
                     "Virtual-network UUID mismatch for interface:",
-                    UuidToString(u),
+                    UUIDToString(u),
                     "configuration VN uuid",
-                    UuidToString(data->vn_uuid_),
+                    UUIDToString(data->vn_uuid_),
                     "compute VN uuid",
-                    UuidToString(cfg_entry->GetVnUuid()));
+                    UUIDToString(cfg_entry->GetVnUuid()));
     }
 }
 
@@ -732,11 +707,11 @@ static void BuildVm(VmInterfaceConfigData *data, IFMapNode *node,
     if (cfg_entry && (cfg_entry->GetVmUuid() != data->vm_uuid_)) {
         IFMAP_ERROR(InterfaceConfiguration, 
                     "Virtual-machine UUID mismatch for interface:",
-                    UuidToString(u),
+                    UUIDToString(u),
                     "configuration VM UUID is",
-                    UuidToString(data->vm_uuid_),
+                    UUIDToString(data->vm_uuid_),
                     "compute VM uuid is",
-                    UuidToString(cfg_entry->GetVmUuid()));
+                    UUIDToString(cfg_entry->GetVmUuid()));
     }
 }
 
@@ -991,7 +966,6 @@ static void BuildAttributes(Agent *agent, IFMapNode *node,
         data->vm_mac_ = cfg->mac_addresses().at(0);
     }
     data->disable_policy_ = cfg->disable_policy();
-    BuildProxyArpFlags(agent, data, cfg);
 }
 
 static void UpdateAttributes(Agent *agent, VmInterfaceConfigData *data) {
@@ -1118,8 +1092,7 @@ static bool DeleteVmi(InterfaceTable *table, const uuid &u, DBRequest *req) {
         req->oper = DBRequest::DB_ENTRY_ADD_CHANGE;
         req->key.reset(new VmInterfaceKey(AgentKey::RESYNC, u, ""));
         req->data.reset(new VmInterfaceConfigData(NULL, NULL));
-        table->Enqueue(req);
-        return false;
+        return true;
     } else {
         VmInterface::Delete(table, u, VmInterface::CONFIG);
         return false;
@@ -1647,7 +1620,7 @@ void VmInterface::UpdateBridgeRoutes(bool old_bridging, VrfEntry *old_vrf,
                            old_layer3_forwarding, policy_change,
                            Ip4Address(), Ip6Address(),
                            vm_mac_,
-                           Ip4Address(0), ecmp_);
+                           Ip4Address(0));
     UpdateIpv4InstanceIp(force_update, policy_change, true, old_ethernet_tag,
                          old_vrf);
     UpdateIpv6InstanceIp(force_update, policy_change, true, old_ethernet_tag);
@@ -1941,8 +1914,7 @@ VmInterfaceConfigData::VmInterfaceConfigData(Agent *agent, IFMapNode *node) :
     cfg_name_(""), vm_uuid_(), vm_name_(), vn_uuid_(), vrf_name_(""),
     fabric_port_(true), need_linklocal_ip_(false), bridging_(true),
     layer3_forwarding_(true), mirror_enable_(false), ecmp_(false),
-    ecmp6_(false), dhcp_enable_(true),
-    proxy_arp_mode_(VmInterface::PROXY_ARP_NONE), admin_state_(true),
+    ecmp6_(false), dhcp_enable_(true), admin_state_(true),
     disable_policy_(false), analyzer_name_(""),
     local_preference_(VmInterface::INVALID), oper_dhcp_options_(),
     mirror_direction_(Interface::UNKNOWN), sg_list_(),
@@ -2176,11 +2148,6 @@ bool VmInterface::CopyConfig(const InterfaceTable *table,
 
     if (dhcp_enable_ != data->dhcp_enable_) {
         dhcp_enable_ = data->dhcp_enable_;
-        ret = true;
-    }
-
-    if (proxy_arp_mode_ != data->proxy_arp_mode_) {
-        proxy_arp_mode_ = data->proxy_arp_mode_;
         ret = true;
     }
 
@@ -2857,14 +2824,59 @@ bool VmInterface::WaitForTraffic() const {
      return rt->FindPath(peer_.get())->path_preference().wait_for_traffic();
 }
 
-// Policy is disabled only if user explicitly sets disable policy.
-// If user changes to disable policy. only policy will be enabled in case of
-// link local services & BGP as a service.
+// Compute if policy is to be enabled on the interface
 bool VmInterface::PolicyEnabled() const {
     if (disable_policy_) {
         return false;
     }
-    return true;
+
+    // Policy not supported for fabric ports
+    if (fabric_port_) {
+        return false;
+    }
+
+    if (layer3_forwarding_ == false) {
+        return false;
+    }
+
+    if (vn_.get() && vn_->IsAclSet()) {
+        return true;
+    }
+
+    // Floating-IP list, Alias-IP list and SG List can have entries in
+    // del_pending state Look for entries in non-del-pending state
+    FloatingIpSet::iterator fip_it = floating_ip_list_.list_.begin();
+    while (fip_it != floating_ip_list_.list_.end()) {
+        if (fip_it->del_pending_ == false) {
+            return true;
+        }
+        fip_it++;
+    }
+
+    AliasIpSet::iterator aip_it = alias_ip_list_.list_.begin();
+    while (aip_it != alias_ip_list_.list_.end()) {
+        if (aip_it->del_pending_ == false) {
+            return true;
+        }
+        aip_it++;
+    }
+
+    SecurityGroupEntrySet::iterator sg_it = sg_list_.list_.begin();
+    while (sg_it != sg_list_.list_.end()) {
+        if (sg_it->del_pending_ == false) {
+            return true;
+        }
+        sg_it++;
+    }
+
+    VrfAssignRuleSet::iterator vrf_it = vrf_assign_rule_list_.list_.begin();
+    while (vrf_it != vrf_assign_rule_list_.list_.end()) {
+        if (vrf_it->del_pending_ == false) {
+            return true;
+        }
+        vrf_it++;
+    }
+    return false;
 }
 
 // VN is in VXLAN mode if,
@@ -3474,7 +3486,7 @@ void VmInterface::UpdateAllowedAddressPair(bool force_update, bool policy_change
             it->L2Activate(this, force_update, policy_change,
                     old_layer2_forwarding, old_layer3_forwarding);
         } else {
-           it->Activate(this, force_update, policy_change);
+           it->Activate(this, (force_update || policy_change));
         }
     }
 }
@@ -3496,6 +3508,63 @@ void VmInterface::DeleteAllowedAddressPair(bool l2) {
             allowed_address_pair_list_.list_.erase(prev);
         }
     }
+}
+
+static bool CompareAddressType(const AddressType &lhs,
+                               const AddressType &rhs) {
+    if (lhs.subnet.ip_prefix != rhs.subnet.ip_prefix) {
+        return false;
+    }
+
+    if (lhs.subnet.ip_prefix_len != rhs.subnet.ip_prefix_len) {
+        return false;
+    }
+
+    if (lhs.virtual_network != rhs.virtual_network) {
+        return false;
+    }
+
+    if (lhs.security_group != rhs.security_group) {
+        return false;
+    }
+    return true;
+}
+
+static bool ComparePortType(const PortType &lhs,
+                            const PortType &rhs) {
+    if (lhs.start_port != rhs.start_port) {
+        return false;
+    }
+
+    if (lhs.end_port != rhs.end_port) {
+        return false;
+    }
+    return true;
+}
+
+static bool CompareMatchConditionType(const MatchConditionType &lhs,
+                                      const MatchConditionType &rhs) {
+    if (lhs.protocol != rhs.protocol) {
+        return lhs.protocol < rhs.protocol;
+    }
+
+    if (!CompareAddressType(lhs.src_address, rhs.src_address)) {
+        return false;
+    }
+
+    if (!ComparePortType(lhs.src_port, rhs.src_port)) {
+        return false;
+    }
+
+    if (!CompareAddressType(lhs.dst_address, rhs.dst_address)) {
+        return false;
+    }
+
+    if (!ComparePortType(lhs.dst_port, rhs.dst_port)) {
+        return false;
+    }
+
+    return true;
 }
 
 void VmInterface::UpdateVrfAssignRule() {
@@ -3633,8 +3702,7 @@ void VmInterface::UpdateL2InterfaceRoute(bool old_bridging, bool force_update,
                                          const Ip4Address &new_ip_addr,
                                          const Ip6Address &new_ip6_addr,
                                          const MacAddress &mac,
-                                         const IpAddress &dependent_ip,
-                                         bool ecmp) const {
+                                         const IpAddress &dependent_ip) const {
     if (ethernet_tag_ != old_ethernet_tag) {
         force_update = true;
     }
@@ -3673,7 +3741,7 @@ void VmInterface::UpdateL2InterfaceRoute(bool old_bridging, bool force_update,
     CopySgIdList(&sg_id_list);
 
     PathPreference path_preference;
-    SetPathPreference(&path_preference, ecmp, dependent_ip);
+    SetPathPreference(&path_preference, false, dependent_ip);
 
     if (policy_changed == true) {
         //Resync the nexthop
@@ -3745,7 +3813,7 @@ void VmInterface::SetPathPreference(PathPreference *pref, bool ecmp,
     if (local_preference_ != INVALID) {
         pref->set_static_preference(true);
     }
-    if (local_preference_ == HIGH || ecmp == true) {
+    if (local_preference_ == HIGH) {
         pref->set_preference(PathPreference::HIGH);
     }
     pref->set_dependent_ip(dependent_ip);
@@ -3919,22 +3987,19 @@ bool VmInterface::GetIpamDhcpOptions(
 // InstanceIp routines
 /////////////////////////////////////////////////////////////////////////////
 VmInterface::InstanceIp::InstanceIp() :
-    ListEntry(), ip_(), plen_(), ecmp_(false), l2_installed_(false),
+    ListEntry(), ip_(), plen_(), ecmp_(false), l2_installed_(false), old_ecmp_(false),
     is_primary_(false), is_service_health_check_ip_(false), is_local_(false),
-    old_tracking_ip_(), tracking_ip_(), l3_ecmp_mode_changed_(false),
-    l2_ecmp_mode_changed_(false) {
+    old_tracking_ip_(), tracking_ip_() {
 }
 
 VmInterface::InstanceIp::InstanceIp(const InstanceIp &rhs) :
     ListEntry(rhs.installed_, rhs.del_pending_),
     ip_(rhs.ip_), plen_(rhs.plen_), ecmp_(rhs.ecmp_),
-    l2_installed_(rhs.l2_installed_),
+    l2_installed_(rhs.l2_installed_), old_ecmp_(rhs.old_ecmp_),
     is_primary_(rhs.is_primary_),
     is_service_health_check_ip_(rhs.is_service_health_check_ip_),
     is_local_(rhs.is_local_), old_tracking_ip_(rhs.old_tracking_ip_),
-    tracking_ip_(rhs.tracking_ip_),
-    l3_ecmp_mode_changed_(rhs.l3_ecmp_mode_changed_),
-    l2_ecmp_mode_changed_(rhs.l2_ecmp_mode_changed_) {
+    tracking_ip_(rhs.tracking_ip_) {
 }
 
 VmInterface::InstanceIp::InstanceIp(const IpAddress &addr, uint8_t plen,
@@ -3943,10 +4008,9 @@ VmInterface::InstanceIp::InstanceIp(const IpAddress &addr, uint8_t plen,
                                     bool is_local,
                                     const IpAddress &tracking_ip) :
     ListEntry(), ip_(addr), plen_(plen), ecmp_(ecmp),
-    l2_installed_(false), is_primary_(is_primary),
+    l2_installed_(false), old_ecmp_(false), is_primary_(is_primary),
     is_service_health_check_ip_(is_service_health_check_ip),
-    is_local_(is_local), tracking_ip_(tracking_ip),
-    l3_ecmp_mode_changed_(false), l2_ecmp_mode_changed_(false) {
+    is_local_(is_local), tracking_ip_(tracking_ip) {
 }
 
 VmInterface::InstanceIp::~InstanceIp() {
@@ -3963,8 +4027,9 @@ bool VmInterface::InstanceIp::IsLess(const InstanceIp *rhs) const {
 
 void VmInterface::InstanceIp::L3Activate(VmInterface *interface,
                                          bool force_update) const {
-    if (l3_ecmp_mode_changed_) {
+    if (old_ecmp_ != ecmp_) {
         force_update = true;
+        old_ecmp_ = ecmp_;
     }
 
     if (old_tracking_ip_ != tracking_ip_) {
@@ -3997,7 +4062,6 @@ void VmInterface::InstanceIp::L3Activate(VmInterface *interface,
                             interface->GetServiceIp(ip_), tracking_ip_,
                             CommunityList(), interface->label());
     }
-    l3_ecmp_mode_changed_ = false;
     installed_ = true;
 }
 
@@ -4026,10 +4090,6 @@ void VmInterface::InstanceIp::L2Activate(VmInterface *interface,
         return;
     }
 
-    if (l2_ecmp_mode_changed_) {
-        force_update = true;
-    }
-
     if (ip_.is_v4()) {
         // check if L3 route is already installed or not 
         if (installed_ == false) {
@@ -4054,9 +4114,8 @@ void VmInterface::InstanceIp::L2Activate(VmInterface *interface,
                                old_ethernet_tag, false,
                                false, ipv4, ipv6,
                                interface->vm_mac(),
-                               tracking_ip_, ecmp_);
+                               tracking_ip_);
         l2_installed_ = true;
-        l2_ecmp_mode_changed_ = false;
     }
 }
 
@@ -4126,8 +4185,6 @@ void VmInterface::InstanceIpList::Update(const InstanceIp *lhs,
                                          const InstanceIp *rhs) {
     if (lhs->ecmp_ != rhs->ecmp_) {
         lhs->ecmp_ = rhs->ecmp_;
-        lhs->l3_ecmp_mode_changed_ = true;
-        lhs->l2_ecmp_mode_changed_ = true;
     }
 
     lhs->is_service_health_check_ip_ = rhs->is_service_health_check_ip_;
@@ -4597,8 +4654,7 @@ void VmInterface::StaticRouteList::Remove(StaticRouteSet::iterator &it) {
 ///////////////////////////////////////////////////////////////////////////////
 VmInterface::AllowedAddressPair::AllowedAddressPair() :
     ListEntry(), vrf_(""), addr_(), plen_(0), ecmp_(false), mac_(),
-    l2_entry_installed_(false), l3_ecmp_config_changed_(false),
-    l2_ecmp_config_changed_(false), ethernet_tag_(0),
+    l2_entry_installed_(false), ecmp_config_changed_(false), ethernet_tag_(0),
     vrf_ref_(NULL, this), service_ip_(), label_(MplsTable::kInvalidLabel),
     policy_enabled_nh_(NULL), policy_disabled_nh_(NULL) {
 }
@@ -4608,8 +4664,7 @@ VmInterface::AllowedAddressPair::AllowedAddressPair(
     rhs.del_pending_), vrf_(rhs.vrf_), addr_(rhs.addr_), plen_(rhs.plen_),
     ecmp_(rhs.ecmp_), mac_(rhs.mac_),
     l2_entry_installed_(rhs.l2_entry_installed_),
-    l3_ecmp_config_changed_(rhs.l3_ecmp_config_changed_),
-    l2_ecmp_config_changed_(rhs.l2_ecmp_config_changed_),
+    ecmp_config_changed_(rhs.ecmp_config_changed_),
     ethernet_tag_(rhs.ethernet_tag_), vrf_ref_(rhs.vrf_ref_, this),
     service_ip_(rhs.service_ip_), label_(rhs.label_),
     policy_enabled_nh_(rhs.policy_enabled_nh_),
@@ -4621,9 +4676,8 @@ VmInterface::AllowedAddressPair::AllowedAddressPair(const std::string &vrf,
                                                     uint32_t plen, bool ecmp,
                                                     const MacAddress &mac) :
     ListEntry(), vrf_(vrf), addr_(addr), plen_(plen), ecmp_(ecmp), mac_(mac),
-    l2_entry_installed_(false), l3_ecmp_config_changed_(false),
-    l2_ecmp_config_changed_(false), ethernet_tag_(0), vrf_ref_(NULL, this),
-    label_(MplsTable::kInvalidLabel),
+    l2_entry_installed_(false), ecmp_config_changed_(false), ethernet_tag_(0),
+    vrf_ref_(NULL, this), label_(MplsTable::kInvalidLabel),
     policy_enabled_nh_(NULL), policy_disabled_nh_(NULL) {
 }
 
@@ -4665,7 +4719,7 @@ void VmInterface::AllowedAddressPair::L2Activate(VmInterface *interface,
     if (l2_entry_installed_ && force_update == false &&
         policy_change == false && ethernet_tag_ == interface->ethernet_tag() &&
         old_layer3_forwarding == interface->layer3_forwarding() &&
-        l2_ecmp_config_changed_ == false) {
+        ecmp_config_changed_ == false) {
         return;
     }
 
@@ -4675,7 +4729,7 @@ void VmInterface::AllowedAddressPair::L2Activate(VmInterface *interface,
 
     vrf_ref_ = interface->vrf();
     if (old_layer3_forwarding != interface->layer3_forwarding() ||
-        l2_entry_installed_ == false || l2_ecmp_config_changed_) {
+        l2_entry_installed_ == false || ecmp_config_changed_) {
         force_update = true;
     }
 
@@ -4688,11 +4742,18 @@ void VmInterface::AllowedAddressPair::L2Activate(VmInterface *interface,
         Ip4Address v4ip(0);
         Ip6Address v6ip;
         if (addr_.is_v4()) {
-            dependent_rt = Ip4Address(0);
+            dependent_rt = v4ip;
             v4ip = addr_.to_v4();
         } else if (addr_.is_v6()) {
-            dependent_rt = Ip6Address();
+            dependent_rt = v6ip;
             v6ip = addr_.to_v6();
+        }
+        if (ecmp_ == true) {
+            if (addr_.is_v4()) {
+                dependent_rt = interface->primary_ip_addr();
+            } else if (addr_.is_v6()) {
+                dependent_rt = interface->primary_ip6_addr();
+            }
         }
 
         if (interface->bridging()) {
@@ -4700,7 +4761,7 @@ void VmInterface::AllowedAddressPair::L2Activate(VmInterface *interface,
                                    force_update, interface->vrf(), v4ip, v6ip,
                                    ethernet_tag_, old_layer3_forwarding,
                                    policy_change, v4ip, v6ip, mac_,
-                                   dependent_rt, ecmp_);
+                                   dependent_rt);
         }
         ethernet_tag_ = interface->ethernet_tag();
         //If layer3 forwarding is disabled
@@ -4712,7 +4773,7 @@ void VmInterface::AllowedAddressPair::L2Activate(VmInterface *interface,
         } else {
             l2_entry_installed_ = false;
         }
-        l2_ecmp_config_changed_ = false;
+        ecmp_config_changed_ = false;
     }
 }
 
@@ -4739,18 +4800,11 @@ void VmInterface::AllowedAddressPair::L2DeActivate(VmInterface *interface) const
 }
 
 void VmInterface::AllowedAddressPair::CreateLabelAndNH(Agent *agent,
-                                                       VmInterface *interface,
-                                                       bool policy_change)
-                                                       const {
-    uint32_t old_label = MplsTable::kInvalidLabel;
+                                                      VmInterface *interface) const {
     //Allocate a new L3 label with proper layer 2
     //rewrite information
     if (label_ == MplsTable::kInvalidLabel) {
         label_ = agent->mpls_table()->AllocLabel();
-    } else if (policy_change) {
-        old_label = label_;
-        label_ = agent->mpls_table()->AllocLabel();
-        MplsLabel::Delete(interface->agent(), old_label);
     }
 
     InterfaceNH::CreateL3VmInterfaceNH(interface->GetUuid(), mac_,
@@ -4778,12 +4832,11 @@ void VmInterface::AllowedAddressPair::CreateLabelAndNH(Agent *agent,
 }
 
 void VmInterface::AllowedAddressPair::Activate(VmInterface *interface,
-                                               bool force_update,
-                                               bool policy_change) const {
+                                               bool force_update) const {
     IpAddress ip = interface->GetServiceIp(addr_);
 
     if (installed_ && force_update == false && service_ip_ == ip &&
-        policy_change == false && l3_ecmp_config_changed_ == false) {
+        ecmp_config_changed_ == false) {
         return;
     }
 
@@ -4793,23 +4846,38 @@ void VmInterface::AllowedAddressPair::Activate(VmInterface *interface,
     }
 
     if (installed_ == false || force_update || service_ip_ != ip ||
-        policy_change || l3_ecmp_config_changed_) {
+        ecmp_config_changed_) {
         service_ip_ = ip;
+        IpAddress dependent_rt;
+        if (ecmp_ == true) {
+            if (addr_.is_v4()) {
+                dependent_rt = interface->primary_ip_addr();
+            } else if (addr_.is_v6()) {
+                dependent_rt = interface->primary_ip6_addr();
+            }
+        } else {
+            if (addr_.is_v4()) {
+                dependent_rt = Ip4Address(0);
+            } else if (addr_.is_v6()) {
+                dependent_rt = Ip6Address();
+            }
+        }
+
         if (mac_ == MacAddress::kZeroMac ||
             mac_ == interface->vm_mac_) {
             interface->AddRoute(vrf_, addr_, plen_, interface->vn_->GetName(),
                                 false, ecmp_, false, false, service_ip_,
-                                Ip4Address(0), CommunityList(),
+                                dependent_rt, CommunityList(),
                                 interface->label());
         } else {
-            CreateLabelAndNH(agent, interface, policy_change);
+            CreateLabelAndNH(agent, interface);
             interface->AddRoute(vrf_, addr_, plen_, interface->vn_->GetName(),
                                 false, ecmp_, false, false, service_ip_,
-                                Ip6Address(), CommunityList(), label_);
+                                dependent_rt, CommunityList(), label_);
         }
     }
     installed_ = true;
-    l3_ecmp_config_changed_ = false;
+    ecmp_config_changed_ = false;
 }
 
 void VmInterface::AllowedAddressPair::DeActivate(VmInterface *interface) const {
@@ -4832,8 +4900,7 @@ void VmInterface::AllowedAddressPairList::Update(const AllowedAddressPair *lhs,
     lhs->set_del_pending(false);
     if (lhs->ecmp_ != rhs->ecmp_) {
         lhs->ecmp_ = rhs->ecmp_;
-        lhs->l3_ecmp_config_changed_ = true;
-        lhs->l2_ecmp_config_changed_ = true;
+        lhs->ecmp_config_changed_ = true;
     }
 }
 
@@ -5244,12 +5311,12 @@ VmInterface::hc_instance_set() const {
 // VRF assign rule routines
 ////////////////////////////////////////////////////////////////////////////
 VmInterface::VrfAssignRule::VrfAssignRule():
-    ListEntry(), id_(0), vrf_name_(" "), ignore_acl_(false) {
+    ListEntry(), id_(0), vrf_name_(" "), vrf_(NULL, this), ignore_acl_(false) {
 }
 
 VmInterface::VrfAssignRule::VrfAssignRule(const VrfAssignRule &rhs):
     ListEntry(rhs.installed_, rhs.del_pending_), id_(rhs.id_),
-    vrf_name_(rhs.vrf_name_), ignore_acl_(rhs.ignore_acl_),
+    vrf_name_(rhs.vrf_name_), vrf_(rhs.vrf_, this), ignore_acl_(rhs.ignore_acl_),
     match_condition_(rhs.match_condition_) {
 }
 
@@ -5257,7 +5324,7 @@ VmInterface::VrfAssignRule::VrfAssignRule(uint32_t id,
     const autogen::MatchConditionType &match_condition, 
     const std::string &vrf_name,
     bool ignore_acl):
-    ListEntry(), id_(id), vrf_name_(vrf_name),
+    ListEntry(), id_(id), vrf_name_(vrf_name), vrf_(NULL, this),
     ignore_acl_(ignore_acl), match_condition_(match_condition) {
 }
 
@@ -5270,7 +5337,17 @@ bool VmInterface::VrfAssignRule::operator() (const VrfAssignRule &lhs,
 }
 
 bool VmInterface::VrfAssignRule::IsLess(const VrfAssignRule *rhs) const {
-    return id_ < rhs->id_;
+    if (id_ != rhs->id_) {
+        return id_ < rhs->id_;
+    }
+    if (vrf_name_ != rhs->vrf_name_) {
+        return vrf_name_ < rhs->vrf_name_;
+    }
+    if (ignore_acl_ != rhs->ignore_acl_) {
+        return ignore_acl_ < rhs->ignore_acl_;
+    }
+
+    return CompareMatchConditionType(match_condition_, rhs->match_condition_);
 }
 
 void VmInterface::VrfAssignRuleList::Insert(const VrfAssignRule *rhs) {
@@ -5280,9 +5357,6 @@ void VmInterface::VrfAssignRuleList::Insert(const VrfAssignRule *rhs) {
 void VmInterface::VrfAssignRuleList::Update(const VrfAssignRule *lhs,
                                             const VrfAssignRule *rhs) {
     lhs->set_del_pending(false);
-    lhs->match_condition_ = rhs->match_condition_;
-    lhs->ignore_acl_ = rhs->ignore_acl_;
-    lhs->vrf_name_ = rhs->vrf_name_;
 }
 
 void VmInterface::VrfAssignRuleList::Remove(VrfAssignRuleSet::iterator &it) {
@@ -5349,7 +5423,7 @@ void VmInterface::SendTrace(const AgentDBTable *table, Trace event) const {
 
     intf_info.set_ip_address(primary_ip_addr_.to_string());
     if (vm_) {
-        intf_info.set_vm(UuidToString(vm_->GetUuid()));
+        intf_info.set_vm(UUIDToString(vm_->GetUuid()));
     }
     if (vn_) {
         intf_info.set_vn(vn_->GetName());
@@ -5357,7 +5431,7 @@ void VmInterface::SendTrace(const AgentDBTable *table, Trace event) const {
     if (vrf_) {
         intf_info.set_vrf(vrf_->GetName());
     }
-    intf_info.set_vm_project(UuidToString(vm_project_uuid_));
+    intf_info.set_vm_project(UUIDToString(vm_project_uuid_));
     OPER_TRACE_ENTRY(Interface,
                      table,
                      intf_info);

@@ -105,8 +105,6 @@ public:
         walkable_route_tables_ = walkable_route_tables;
     }
     uint32_t walkable_route_tables() const {return walkable_route_tables_;}
-    //Stops all walks, calls walkcancel.
-    void StopAllWalks();
 
 private:
     void StartVrfWalkInternal();

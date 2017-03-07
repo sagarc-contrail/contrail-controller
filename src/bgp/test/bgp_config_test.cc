@@ -439,7 +439,7 @@ TEST_F(BgpConfigTest, BGPaaSNeighbors2) {
     TASK_UTIL_EXPECT_EQ(0, server_.num_bgpaas_peer());
 }
 
-TEST_F(BgpConfigTest, BGPaaSNeighbors3a) {
+TEST_F(BgpConfigTest, BGPaaSNeighbors3) {
     string content;
     content = FileRead("controller/src/bgp/testdata/config_test_36a.xml");
     EXPECT_TRUE(parser_.Parse(content));
@@ -466,6 +466,9 @@ TEST_F(BgpConfigTest, BGPaaSNeighbors3a) {
     TASK_UTIL_EXPECT_EQ(1025, peer2->peer_port());
     TASK_UTIL_EXPECT_EQ(peer2, server_.FindPeer(peer2->endpoint()));
 
+    // Save the old endpoint for peer1.
+    TcpSession::Endpoint old_peer1_endpoint = peer1->endpoint();
+
     // Set test::vm1 port to be same as port for test:vm2.
     content = FileRead("controller/src/bgp/testdata/config_test_36c.xml");
     EXPECT_TRUE(parser_.Parse(content));
@@ -477,11 +480,12 @@ TEST_F(BgpConfigTest, BGPaaSNeighbors3a) {
     // Verify that the port is identical for test:vm2.
     TASK_UTIL_EXPECT_EQ(1025, peer2->peer_port());
 
-    // Verify that test:vm1 is inserted into BgpServer::EndpointPeerList.
-    // Verify that test:vm2 is inserted into BgpServer::EndpointPeerList.
-    // Both peers have the same endpoint.
-    TASK_UTIL_EXPECT_EQ(peer1, server_.FindExactPeer(peer1));
-    TASK_UTIL_EXPECT_EQ(peer2, server_.FindExactPeer(peer2));
+    // Verify that test:vm1 is inserted into BgpServer::EndpointToBgpPeerList.
+    // Verify that there's no entry for the old remote endpoint for test:vm1.
+    // Note that test:vm2 is removed from BgpServer::EndpointToBgpPeerList when
+    // test:vm1 is inserted with the same remote endpoint.
+    TASK_UTIL_EXPECT_EQ(peer1, server_.FindPeer(peer1->endpoint()));
+    TASK_UTIL_EXPECT_TRUE(server_.FindPeer(old_peer1_endpoint) == NULL);
 
     // Set test::vm2 port to be same as old port for test:vm1.
     content = FileRead("controller/src/bgp/testdata/config_test_36d.xml");
@@ -491,81 +495,8 @@ TEST_F(BgpConfigTest, BGPaaSNeighbors3a) {
     // Verify that the port is updated for test:vm2.
     TASK_UTIL_EXPECT_EQ(1024, peer2->peer_port());
 
-    // Verify that test:vm1 is inserted into BgpServer::EndpointPeerList.
-    // Verify that test:vm2 is inserted into BgpServer::EndpointPeerList.
-    TASK_UTIL_EXPECT_EQ(peer1, server_.FindPeer(peer1->endpoint()));
-    TASK_UTIL_EXPECT_EQ(peer2, server_.FindPeer(peer2->endpoint()));
-
-    // Cleanup.
-    boost::replace_all(content, "<config>", "<delete>");
-    boost::replace_all(content, "</config>", "</delete>");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-
-    // Ensure that the instance is deleted
-    TASK_UTIL_EXPECT_EQ(static_cast<RoutingInstance *>(NULL),
-            server_.routing_instance_mgr()->GetRoutingInstance("test"));
-    TASK_UTIL_EXPECT_EQ(0, server_.num_bgp_peer());
-    TASK_UTIL_EXPECT_EQ(0, server_.num_bgpaas_peer());
-}
-
-TEST_F(BgpConfigTest, BGPaaSNeighbors3b) {
-    string content;
-    content = FileRead("controller/src/bgp/testdata/config_test_36a.xml");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-
-    RoutingInstance *rti =
-        server_.routing_instance_mgr()->GetRoutingInstance("test");
-    TASK_UTIL_ASSERT_TRUE(rti != NULL);
-    TASK_UTIL_EXPECT_EQ(2, rti->peer_manager()->size());
-    TASK_UTIL_EXPECT_EQ(0, server_.num_bgp_peer());
-    TASK_UTIL_EXPECT_EQ(2, server_.num_bgpaas_peer());
-
-    // Verify that the port is set for test:vm1.
-    TASK_UTIL_EXPECT_TRUE(
-        rti->peer_manager()->PeerLookup("test:vm1:0") != NULL);
-    BgpPeer *peer1 = rti->peer_manager()->PeerLookup("test:vm1:0");
-    TASK_UTIL_EXPECT_EQ(1024, peer1->peer_port());
-    TASK_UTIL_EXPECT_EQ(peer1, server_.FindPeer(peer1->endpoint()));
-
-    // Verify that the port is set for test:vm2.
-    TASK_UTIL_EXPECT_TRUE(
-        rti->peer_manager()->PeerLookup("test:vm2:0") != NULL);
-    BgpPeer *peer2 = rti->peer_manager()->PeerLookup("test:vm2:0");
-    TASK_UTIL_EXPECT_EQ(1025, peer2->peer_port());
-    TASK_UTIL_EXPECT_EQ(peer2, server_.FindPeer(peer2->endpoint()));
-
-    // Set test::vm1 port to be same as port for test:vm2.
-    content = FileRead("controller/src/bgp/testdata/config_test_36c.xml");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-
-    // Verify that the port is updated for test:vm1.
-    TASK_UTIL_EXPECT_EQ(1025, peer1->peer_port());
-
-    // Verify that the port is identical for test:vm2.
-    TASK_UTIL_EXPECT_EQ(1025, peer2->peer_port());
-
-    // Verify that test:vm1 is inserted into BgpServer::EndpointPeerList.
-    // Verify that test:vm2 is inserted into BgpServer::EndpointPeerList.
-    // Both peers have the same endpoint.
-    TASK_UTIL_EXPECT_EQ(peer1, server_.FindExactPeer(peer1));
-    TASK_UTIL_EXPECT_EQ(peer2, server_.FindExactPeer(peer2));
-
-    // Set test::vm1 port back to be same as original port for test:vm1.
-    content = FileRead("controller/src/bgp/testdata/config_test_36a.xml");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-
-    // Verify that the port is updated for test:vm1.
-    TASK_UTIL_EXPECT_EQ(1024, peer1->peer_port());
-
-    // Verify that the port is unchanged for test:vm2.
-    TASK_UTIL_EXPECT_EQ(1025, peer2->peer_port());
-
-    // Verify that test:vm1 is inserted into BgpServer::EndpointPeerList.
-    // Verify that test:vm2 is inserted into BgpServer::EndpointPeerList.
+    // Verify that test:vm1 is inserted into BgpServer::EndpointToBgpPeerList.
+    // Verify that test:vm2 is inserted into BgpServer::EndpointToBgpPeerList.
     TASK_UTIL_EXPECT_EQ(peer1, server_.FindPeer(peer1->endpoint()));
     TASK_UTIL_EXPECT_EQ(peer2, server_.FindPeer(peer2->endpoint()));
 
@@ -909,7 +840,7 @@ TEST_F(BgpConfigTest, BGPaaSNeighbors9) {
     TASK_UTIL_EXPECT_TRUE(server_.FindPeer(peer2->endpoint()) == NULL);
 
     // Recreate neighbor config. The old peers should still be around
-    // but should not be in the BgpServer::EndpointPeerList.
+    // but should not be in the BgpServer::EndpointToBgpPeerList.
     content = FileRead("controller/src/bgp/testdata/config_test_36a.xml");
     EXPECT_TRUE(parser_.Parse(content));
     task_util::WaitForIdle();
@@ -926,93 +857,6 @@ TEST_F(BgpConfigTest, BGPaaSNeighbors9) {
     task_util::WaitForIdle();
 
     // Make sure the peers got resurrected.
-    TASK_UTIL_EXPECT_TRUE(
-        rti->peer_manager()->PeerLookup("test:vm1:0") != NULL);
-    peer1 = rti->peer_manager()->PeerLookup("test:vm1:0");
-    TASK_UTIL_EXPECT_EQ(1024, peer1->peer_port());
-    TASK_UTIL_EXPECT_EQ(peer1, server_.FindPeer(peer1->endpoint()));
-
-    TASK_UTIL_EXPECT_TRUE(
-        rti->peer_manager()->PeerLookup("test:vm2:0") != NULL);
-    peer2 = rti->peer_manager()->PeerLookup("test:vm2:0");
-    TASK_UTIL_EXPECT_EQ(1025, peer2->peer_port());
-    TASK_UTIL_EXPECT_EQ(peer2, server_.FindPeer(peer2->endpoint()));
-
-    // Get rid of the peers.
-    boost::replace_all(content, "<config>", "<delete>");
-    boost::replace_all(content, "</config>", "</delete>");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-
-    TASK_UTIL_EXPECT_EQ(0, db_graph_.edge_count());
-    TASK_UTIL_EXPECT_EQ(0, db_graph_.vertex_count());
-}
-
-//
-// Config for neighbor is re-added before the previous incarnation of the
-// routing-instance has been destroyed.  The peer should get resurrected
-// after the old incarnation of the routing-instance has been destroyed.
-//
-TEST_F(BgpConfigTest, BGPaaSNeighbors10) {
-    string content;
-    content = FileRead("controller/src/bgp/testdata/config_test_36a.xml");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-
-    RoutingInstance *rti =
-        server_.routing_instance_mgr()->GetRoutingInstance("test");
-    TASK_UTIL_ASSERT_TRUE(rti != NULL);
-    TASK_UTIL_EXPECT_EQ(2, rti->peer_manager()->size());
-    TASK_UTIL_EXPECT_EQ(0, server_.num_bgp_peer());
-    TASK_UTIL_EXPECT_EQ(2, server_.num_bgpaas_peer());
-
-    // Verify that peers got created.
-    TASK_UTIL_EXPECT_TRUE(
-        rti->peer_manager()->PeerLookup("test:vm1:0") != NULL);
-    BgpPeer *peer1 = rti->peer_manager()->PeerLookup("test:vm1:0");
-    TASK_UTIL_EXPECT_EQ(1024, peer1->peer_port());
-    TASK_UTIL_EXPECT_EQ(peer1, server_.FindPeer(peer1->endpoint()));
-
-    TASK_UTIL_EXPECT_TRUE(
-        rti->peer_manager()->PeerLookup("test:vm2:0") != NULL);
-    BgpPeer *peer2 = rti->peer_manager()->PeerLookup("test:vm2:0");
-    TASK_UTIL_EXPECT_EQ(1025, peer2->peer_port());
-    TASK_UTIL_EXPECT_EQ(peer2, server_.FindPeer(peer2->endpoint()));
-
-    // Pause deletion of the routing-instance.
-    PauseDelete(rti->deleter());
-    task_util::WaitForIdle();
-
-    // Delete the routing-instance and neighbor config.
-    // The routing-instance can't get destroyed as deletion has been paused
-    // but the peers will get destroyed.
-    content = FileRead("controller/src/bgp/testdata/config_test_36f.xml");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-    TASK_UTIL_EXPECT_TRUE(rti->deleted());
-    TASK_UTIL_EXPECT_EQ(0, rti->peer_manager()->size());
-    TASK_UTIL_EXPECT_EQ(0, server_.num_bgp_peer());
-    TASK_UTIL_EXPECT_EQ(0, server_.num_bgpaas_peer());
-
-    // Recreate routing-instance and neighbor config.
-    // Peers can't get recreated as previous incarnation of routing-instance
-    // is still present.
-    content = FileRead("controller/src/bgp/testdata/config_test_36a.xml");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-    TASK_UTIL_EXPECT_TRUE(rti->deleted());
-    TASK_UTIL_EXPECT_EQ(0, rti->peer_manager()->size());
-    TASK_UTIL_EXPECT_EQ(0, server_.num_bgp_peer());
-    TASK_UTIL_EXPECT_EQ(0, server_.num_bgpaas_peer());
-
-    // Resume deletion of the routing-instance.
-    ResumeDelete(rti->deleter());
-    task_util::WaitForIdle();
-
-    // Make sure the routing-instance and peers got resurrected.
-    rti = server_.routing_instance_mgr()->GetRoutingInstance("test");
-    TASK_UTIL_EXPECT_EQ(2, rti->peer_manager()->size());
-
     TASK_UTIL_EXPECT_TRUE(
         rti->peer_manager()->PeerLookup("test:vm1:0") != NULL);
     peer1 = rti->peer_manager()->PeerLookup("test:vm1:0");
@@ -1979,7 +1823,7 @@ TEST_F(BgpConfigTest, AddressFamilies1) {
 // The address-families config for the local bgp-router should  be used when
 // there's no per session address-families configuration.
 //
-TEST_F(BgpConfigTest, AddressFamilies2a) {
+TEST_F(BgpConfigTest, AddressFamilies2) {
     string content = FileRead("controller/src/bgp/testdata/config_test_13.xml");
     EXPECT_TRUE(parser_.Parse(content));
     task_util::WaitForIdle();
@@ -2004,39 +1848,10 @@ TEST_F(BgpConfigTest, AddressFamilies2a) {
 }
 
 //
-// The address-families config for the local bgp-router should  be used when
-// there's no per session address-families configuration.
-// Families that are not configured on the remote bgp-router should not be
-// included in the configured family list.
-//
-TEST_F(BgpConfigTest, AddressFamilies2b) {
-    string content = FileRead("controller/src/bgp/testdata/config_test_44.xml");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-
-    RoutingInstance *rti = server_.routing_instance_mgr()->GetRoutingInstance(
-        BgpConfigManager::kMasterInstance);
-    TASK_UTIL_ASSERT_TRUE(rti != NULL);
-    BgpPeer *peer = rti->peer_manager()->PeerFind("10.1.1.1");
-    TASK_UTIL_ASSERT_TRUE(peer != NULL);
-
-    TASK_UTIL_EXPECT_EQ(2, peer->configured_families().size());
-    TASK_UTIL_EXPECT_TRUE(peer->LookupFamily(Address::RTARGET));
-    TASK_UTIL_EXPECT_TRUE(peer->LookupFamily(Address::EVPN));
-
-    boost::replace_all(content, "<config>", "<delete>");
-    boost::replace_all(content, "</config>", "</delete>");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-
-    TASK_UTIL_EXPECT_EQ(0, db_graph_.vertex_count());
-}
-
-//
 // The default family should be used if there's no address-families config
 // for the session or the local bgp-router.
 //
-TEST_F(BgpConfigTest, AddressFamilies3a) {
+TEST_F(BgpConfigTest, AddressFamilies3) {
     string content = FileRead("controller/src/bgp/testdata/config_test_14.xml");
     EXPECT_TRUE(parser_.Parse(content));
     task_util::WaitForIdle();
@@ -2049,34 +1864,6 @@ TEST_F(BgpConfigTest, AddressFamilies3a) {
 
     TASK_UTIL_EXPECT_EQ(2, peer->configured_families().size());
     TASK_UTIL_EXPECT_TRUE(peer->LookupFamily(Address::INET));
-    TASK_UTIL_EXPECT_TRUE(peer->LookupFamily(Address::INETVPN));
-
-    boost::replace_all(content, "<config>", "<delete>");
-    boost::replace_all(content, "</config>", "</delete>");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-
-    TASK_UTIL_EXPECT_EQ(0, db_graph_.vertex_count());
-}
-
-//
-// The default family should be used if there's no address-families config
-// for the session or the local bgp-router.
-// Families that are not configured on the remote bgp-router should not be
-// included in the configured family list.
-//
-TEST_F(BgpConfigTest, AddressFamilies3b) {
-    string content = FileRead("controller/src/bgp/testdata/config_test_45.xml");
-    EXPECT_TRUE(parser_.Parse(content));
-    task_util::WaitForIdle();
-
-    RoutingInstance *rti = server_.routing_instance_mgr()->GetRoutingInstance(
-        BgpConfigManager::kMasterInstance);
-    TASK_UTIL_ASSERT_TRUE(rti != NULL);
-    BgpPeer *peer = rti->peer_manager()->PeerFind("10.1.1.1");
-    TASK_UTIL_ASSERT_TRUE(peer != NULL);
-
-    TASK_UTIL_EXPECT_EQ(1, peer->configured_families().size());
     TASK_UTIL_EXPECT_TRUE(peer->LookupFamily(Address::INETVPN));
 
     boost::replace_all(content, "<config>", "<delete>");

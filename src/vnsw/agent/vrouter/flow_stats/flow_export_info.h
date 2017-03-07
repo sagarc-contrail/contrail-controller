@@ -27,6 +27,10 @@ public:
     void set_bytes(uint64_t value) { bytes_ = value; }
     uint64_t packets() const { return packets_; }
     void set_packets(uint64_t value) { packets_ = value; }
+    uint64_t prev_diff_bytes() const { return prev_diff_bytes_; }
+    void set_prev_diff_bytes(uint64_t value) { prev_diff_bytes_ = value; }
+    uint64_t prev_diff_packets() const { return prev_diff_packets_; }
+    void set_prev_diff_packets(uint64_t value) { prev_diff_packets_ = value; }
     uint16_t underlay_source_port() const { return underlay_source_port_; }
     void set_underlay_source_port(uint16_t port) {
         underlay_source_port_ = port;
@@ -50,20 +54,6 @@ public:
     uint64_t delete_enqueue_time() const { return delete_enqueue_time_; }
     void set_evict_enqueue_time(uint64_t value) { evict_enqueue_time_ = value; }
     uint64_t evict_enqueue_time() const { return evict_enqueue_time_; }
-    uint8_t gen_id() const { return gen_id_; }
-    void set_gen_id(uint8_t value) { gen_id_ = value; }
-    uint32_t flow_handle() const { return flow_handle_; }
-    void set_flow_handle(uint32_t value) { flow_handle_ = value; }
-    const boost::uuids::uuid &uuid() const { return uuid_; }
-    const boost::uuids::uuid &rev_flow_egress_uuid() const {
-        return rev_flow_egress_uuid_;
-    }
-    uint32_t flags() const { return flags_; }
-    bool is_flags_set(const FlowEntry::FlowEntryFlags &flags) const {
-        return (flags_ & flags);
-    }
-    void CopyFlowInfo(FlowEntry *fe);
-    void ResetStats();
 private:
     FlowEntryPtr flow_;
     uint64_t setup_time_;
@@ -71,6 +61,12 @@ private:
     uint64_t last_modified_time_; //used for aging
     uint64_t bytes_;
     uint64_t packets_;
+    /* When flow samples are dropped the diff stats for that sample is
+     * accumulated in the following fields. This used to compute aggregate diff
+     * when the flow is being sent again. On successful send the following
+     * fields are reset */
+    uint64_t prev_diff_bytes_;
+    uint64_t prev_diff_packets_;
     //IP address of the src vrouter for egress flows and dst vrouter for
     //ingress flows. Used only during flow-export
     //Underlay IP protocol type. Used only during flow-export
@@ -81,11 +77,6 @@ private:
     uint64_t delete_enqueue_time_;
     uint64_t evict_enqueue_time_;
     bool exported_atleast_once_;
-    uint8_t gen_id_;
-    uint32_t flow_handle_;
-    boost::uuids::uuid uuid_;
-    boost::uuids::uuid rev_flow_egress_uuid_;
-    uint32_t flags_;
 };
 
 #endif //  __AGENT_FLOW_EXPORT_INFO_H__

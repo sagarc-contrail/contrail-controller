@@ -1,6 +1,11 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
+#ifdef _WINDOWS
+#include<netinet/udp.h>
+#include <boost/asio.hpp>
+#include <windows.h>
+#endif
 
 #include <stdint.h>
 #include "base/os.h"
@@ -369,14 +374,6 @@ bool DhcpHandler::HandleVmRequest() {
     if (!vm_itf_->dhcp_enable_config()) {
         DHCP_TRACE(Error, "DHCP request on VM port with dhcp services disabled: "
                    << GetInterfaceIndex());
-        return true;
-    }
-
-    if (vm_itf_->vm_mac() != request_.mac_addr) {
-        DHCP_TRACE(Error, "DHCP request for incorrect MAC: interface = "
-                   << GetInterfaceIndex() << " interface MAC = "
-                   << vm_itf_->vm_mac().ToString() << " requested MAC = "
-                   << request_.mac_addr.ToString());
         return true;
     }
 

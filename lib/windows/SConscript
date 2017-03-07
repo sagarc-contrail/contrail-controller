@@ -1,0 +1,32 @@
+import os
+import subprocess
+import sys
+import glob
+
+print 'Enter windowslib'
+vpath = '#/windows/windowsstubs'
+env = DefaultEnvironment()
+
+abs_vpath = Dir(vpath).abspath
+abs_toppath = Dir('#').abspath
+
+ #build libraries
+def build_windows_libs(target,source,env):
+   curdir = os.getcwd()
+   os.chdir(abs_vpath + r'\Windowsstubs')
+   print os.getcwd()
+   subprocess.call("msbuild thrift.sln", shell=True)
+   cmd = 'copy ' +  abs_vpath + r'\lib\cpp' + r'\Debug' + r'\libthrift.lib ' +  env.Dir(env['TOP_LIB']).abspath + r'\thrift.lib'
+   print cmd
+   subprocess.call(cmd, shell=True)
+   os.chdir(curdir)
+
+
+
+
+
+windows_libs = ['#/build/lib/windowsstubs.lib']
+
+
+env.Command(thrift_libs, str(Dir(vpath)) , build_windows_libs)
+

@@ -48,10 +48,7 @@ public:
     void SetEncap(InterfaceKSyncEntry *if_ksync, std::vector<int8_t> &encap);
     bool is_bridge() const { return is_bridge_; }
 
-    int MsgLen() {
-        // for larger component NH lists, increase message length
-        return kDefaultNhMsgSize * ((component_nh_list_.size() / 128) + 1);
-    }
+    int MsgLen() { return kDefaultNhMsgSize; }
 private:
     class KSyncComponentNH {
     public:

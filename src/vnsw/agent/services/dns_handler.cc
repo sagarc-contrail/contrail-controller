@@ -15,6 +15,10 @@
 #include "oper/operdb_init.h"
 #include "oper/global_vrouter.h"
 #include "oper/vn.h"
+#ifdef _WINDOWS
+#include <netinet/udp.h>
+#include <netinet/ip6.h>
+#endif
 
 DnsHandler::DnsHandler(Agent *agent, boost::shared_ptr<PktInfo> info,
                        boost::asio::io_service &io)
@@ -779,7 +783,7 @@ bool DnsHandler::UpdateAll() {
 
 void DnsHandler::SendXmppUpdate(AgentDnsXmppChannel *channel, 
                                 DnsUpdateData *xmpp_data) {
-    if (channel && agent_->is_dns_xmpp_channel(channel)) {
+    if (channel) {
         // Split the request in case we have more data items
         DnsItems done, store;
         DnsItems::iterator first, last;

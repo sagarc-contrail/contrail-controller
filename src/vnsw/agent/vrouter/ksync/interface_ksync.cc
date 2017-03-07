@@ -4,7 +4,8 @@
 
 #include <stdio.h>
 #include <string.h>
-
+#include <WinSock2.h>
+#include<WinSock2.h> 
 #include <net/if.h>
 
 #include <boost/asio.hpp>
@@ -52,9 +53,7 @@ InterfaceKSyncEntry::InterfaceKSyncEntry(InterfaceKSyncObject *obj,
     layer3_forwarding_(entry->layer3_forwarding_),
     ksync_obj_(obj), l2_active_(false),
     metadata_l2_active_(entry->metadata_l2_active_),
-    metadata_ip_active_(entry->metadata_ip_active_),
     bridging_(entry->bridging_),
-    proxy_arp_mode_(VmInterface::PROXY_ARP_NONE),
     mac_(entry->mac_),
     smac_(entry->smac_),
     mirror_direction_(entry->mirror_direction_),
@@ -97,9 +96,7 @@ InterfaceKSyncEntry::InterfaceKSyncEntry(InterfaceKSyncObject *obj,
     ksync_obj_(obj),
     l2_active_(false),                
     metadata_l2_active_(false),
-    metadata_ip_active_(false),
     bridging_(true),
-    proxy_arp_mode_(VmInterface::PROXY_ARP_NONE),
     mac_(),
     smac_(),
     mirror_direction_(Interface::UNKNOWN),
@@ -254,11 +251,6 @@ bool InterfaceKSyncEntry::Sync(DBEntry *e) {
             ret = true;
         }
 
-        if (proxy_arp_mode_ != vm_port->proxy_arp_mode()) {
-            proxy_arp_mode_ = vm_port->proxy_arp_mode();
-            ret = true;
-        }
-
         if (rx_vlan_id_ != vm_port->rx_vlan_id()) {
             rx_vlan_id_ = vm_port->rx_vlan_id();
             ret = true;
@@ -286,13 +278,6 @@ bool InterfaceKSyncEntry::Sync(DBEntry *e) {
                 vm_port->metadata_l2_active();
             ret = true;
         }
-
-        if (metadata_ip_active_ !=
-            vm_port->metadata_ip_active()) {
-            metadata_ip_active_ =
-                vm_port->metadata_ip_active();
-            ret = true;
-        }
     }
 
     uint32_t vrf_id = VIF_VRF_INVALID;
@@ -300,7 +285,7 @@ bool InterfaceKSyncEntry::Sync(DBEntry *e) {
     std::string analyzer_name;
     Interface::MirrorDirection mirror_direction = Interface::UNKNOWN;
     bool has_service_vlan = false;
-    if (l2_active_ || ipv4_active_ || metadata_l2_active_ || metadata_ip_active_) {
+    if (l2_active_ || ipv4_active_ || metadata_l2_active_) {
         vrf_id = intf->vrf_id();
         if (vrf_id == VrfEntry::kInvalidIndex) {
             vrf_id = VIF_VRF_INVALID;
@@ -536,9 +521,23 @@ int InterfaceKSyncEntry::Encode(sandesh_op::type op, char *buf, int buf_len) {
     vr_interface_req encoder;
     int encode_len;
 
+    // Dont send message if interface index not known
+    if (IsValidOsIndex(os_index_, type_, rx_vlan_id_, vmi_type_, transport_) == false) {
+        return 0;
+    }
+
+    if (type_ == Interface::LOGICAL || type_ == Interface::REMOTE_PHYSICAL) {
+        return 0;
+    }
+
+    // No need to add VLAN sub-interface if there is no parent
+    if (vmi_device_type_ == VmInterface::VM_VLAN_ON_VMI && !parent_.get()) {
+        return 0;
+    }
+
     uint32_t flags = 0;
     encoder.set_h_op(op);
-    if (op == sandesh_op::DELETE) {
+    if (op == sandesh_op::DEL) {
         encoder.set_vifr_idx(interface_id_);
         int error = 0;
         encode_len = encoder.WriteBinary((uint8_t *)buf, buf_len, &error);
@@ -573,9 +572,6 @@ int InterfaceKSyncEntry::Encode(sandesh_op::type op, char *buf, int buf_len) {
         }
         if (flood_unknown_unicast_) {
             flags |= VIF_FLAG_UNKNOWN_UC_FLOOD;
-        }
-        if (proxy_arp_mode_ == VmInterface::PROXY_ARP_UNRESTRICTED) {
-            flags |= VIF_FLAG_MAC_PROXY;
         }
         MacAddress mac;
         if (parent_.get() != NULL) {
@@ -786,9 +782,9 @@ int InterfaceKSyncEntry::AddMsg(char *buf, int buf_len) {
 
 int InterfaceKSyncEntry::DeleteMsg(char *buf, int buf_len) {
     KSyncIntfInfo info;
-    FillObjectLog(sandesh_op::DELETE, info);
+    FillObjectLog(sandesh_op::DEL, info);
     KSYNC_TRACE(Intf, GetObject(), info);
-    return Encode(sandesh_op::DELETE, buf, buf_len);
+    return Encode(sandesh_op::DEL, buf, buf_len);
 }
 
 int InterfaceKSyncEntry::ChangeMsg(char *buf, int buf_len) {

@@ -33,8 +33,6 @@ from cStringIO import StringIO
 from lxml import etree
 # import GreenletProfiler
 
-from cfgm_common import vnc_cgitb
-
 logger = logging.getLogger(__name__)
 
 """
@@ -265,21 +263,6 @@ class VncApiServer(object):
                              % value)
 
     @classmethod
-    def _validate_serviceinterface_type(cls, value):
-        poss_values = ["management",
-                       "left",
-                       "right"]
-
-        if value in poss_values:
-            return
-
-        res = re.match('other[0-9]*', value)
-        if res is None:
-            raise ValueError('Invalid service interface type %s. '
-                             'Valid values are: management|left|right|other[0-9]*'
-                              % value)
-
-    @classmethod
     def _validate_simple_type(cls, type_name, xsd_type, simple_type, value, restrictions=None):
         if value is None:
             return
@@ -297,8 +280,6 @@ class VncApiServer(object):
                     type_name, value))
         elif xsd_type == 'string' and simple_type == 'CommunityAttribute':
             cls._validate_communityattribute_type(value)
-        elif xsd_type == 'string' and simple_type == 'ServiceInterfaceType':
-            cls._validate_serviceinterface_type(value)
         else:
             if not isinstance(value, basestring):
                 raise ValueError('%s: string value expected instead of %s' %(
@@ -408,13 +389,6 @@ class VncApiServer(object):
         r_class = self.get_resource_class(obj_type)
         resource_type = r_class.resource_type
         obj_dict = get_request().json[resource_type]
-
-        # check visibility
-        user_visible = (obj_dict.get('id_perms') or {}).get('user_visible', True)
-        if not user_visible and not self.is_admin_request():
-            result = 'This object is not visible by users'
-            self.config_object_error(None, None, obj_type, 'http_post', result)
-            raise cfgm_common.exceptions.HttpError(400, result)
 
         self._post_validate(obj_type, obj_dict=obj_dict)
         fq_name = obj_dict['fq_name']
@@ -662,9 +636,6 @@ class VncApiServer(object):
             self.config_object_error(id, None, obj_type, 'http_get', result)
             raise cfgm_common.exceptions.HttpError(404, result)
 
-        if not self.is_admin_request():
-            result = self.obj_view(resource_type, result)
-
         rsp_body = {}
         rsp_body['uuid'] = id
         rsp_body['href'] = self.generate_url(resource_type, id)
@@ -680,28 +651,6 @@ class VncApiServer(object):
 
         return {resource_type: rsp_body}
     # end http_resource_read
-
-    # filter object references based on permissions
-    def obj_view(self, resource_type, obj_dict):
-        ret_obj_dict = {}
-        ret_obj_dict.update(obj_dict)
-
-        r_class = self.get_resource_class(resource_type)
-        obj_links = (r_class.ref_fields | r_class.backref_fields | r_class.children_fields) \
-                     & set(obj_dict.keys())
-        obj_uuids = [ref['uuid'] for link in obj_links for ref in list(obj_dict[link])]
-        obj_dicts = self._db_conn._cassandra_db.object_raw_read(obj_uuids, ["perms2"])
-        uuid_to_perms2 = dict((o['uuid'], o['perms2']) for o in obj_dicts)
-
-        for link_field in obj_links:
-            links = obj_dict[link_field]
-
-            # build new links in returned dict based on permissions on linked object
-            ret_obj_dict[link_field] = [l for l in links
-                if self._permissions.check_perms_read(get_request(), l['uuid'], id_perms=uuid_to_perms2[l['uuid']])[0] == True]
-
-        return ret_obj_dict
-    # end obj_view
 
     @log_api_stats
     def http_resource_update(self, obj_type, id):
@@ -742,13 +691,6 @@ class VncApiServer(object):
             fq_name = read_result['fq_name']
         except NoIdError as e:
             raise cfgm_common.exceptions.HttpError(404, str(e))
-
-        # check visibility
-        if (not read_result['id_perms'].get('user_visible', True) and
-            not self.is_admin_request()):
-            result = 'This object is not visible by users: %s' % id
-            self.config_object_error(id, None, obj_type, 'http_put', result)
-            raise cfgm_common.exceptions.HttpError(404, result)
 
         # properties validator
         ok, result = self._validate_props_in_request(r_class, obj_dict)
@@ -881,13 +823,6 @@ class VncApiServer(object):
             self.config_object_error(
                 id, None, obj_type, 'http_delete', read_result)
             # proceed down to delete the resource
-
-        # check visibility
-        if (not read_result['id_perms'].get('user_visible', True) and
-            not self.is_admin_request()):
-            result = 'This object is not visible by users: %s' % id
-            self.config_object_error(id, None, obj_type, 'http_delete', result)
-            raise cfgm_common.exceptions.HttpError(404, result)
 
         # common handling for all resource delete
         parent_obj_type = read_result.get('parent_type')
@@ -1055,13 +990,12 @@ class VncApiServer(object):
             obj_uuids = get_request().query.obj_uuids.split(',')
 
         # common handling for all resource get
-        for parent_uuid in list(parent_uuids or []):
-            (ok, result) = self._get_common(get_request(), parent_uuid)
-            if not ok:
-                parent_uuids.remove(parent_uuid)
-
-        if obj_uuids is None and back_ref_uuids is None and parent_uuids == []:
-            return {'%ss' %(resource_type): []}
+        (ok, result) = self._get_common(get_request(), parent_uuids)
+        if not ok:
+            (code, msg) = result
+            self.config_object_error(
+                None, None, '%ss' %(resource_type), 'http_get_collection', msg)
+            raise cfgm_common.exceptions.HttpError(code, msg)
 
         if 'count' in get_request().query:
             is_count = 'true' in get_request().query.count.lower()
@@ -1078,11 +1012,6 @@ class VncApiServer(object):
         else:
             req_fields = []
 
-        if 'shared' in get_request().query:
-            include_shared = 'true' in get_request().query.shared.lower()
-        else:
-            include_shared = False
-
         try:
             filters = utils.get_filters(get_request().query.filters)
         except Exception as e:
@@ -1091,7 +1020,7 @@ class VncApiServer(object):
 
         return self._list_collection(obj_type, parent_uuids, back_ref_uuids,
                                      obj_uuids, is_count, is_detail, filters,
-                                     req_fields, include_shared)
+                                     req_fields)
     # end http_resource_list
 
     # internal_request_<oper> - handlers of internally generated requests
@@ -1521,6 +1450,10 @@ class VncApiServer(object):
                 staticmethod(ConnectionState.get_process_state_cb),
                 NodeStatusUVE, NodeStatus, self.table)
 
+        # Load extensions
+        self._extension_mgrs = {}
+        self._load_extensions()
+
         # Address Management interface
         addr_mgmt = vnc_addr_mgmt.AddrMgmt(self)
         vnc_cfg_types.LogicalRouterServer.addr_mgmt = addr_mgmt
@@ -1532,6 +1465,15 @@ class VncApiServer(object):
         vnc_cfg_types.VirtualNetworkServer.addr_mgmt = addr_mgmt
         vnc_cfg_types.InstanceIpServer.manager = self
         self._addr_mgmt = addr_mgmt
+
+        # Authn/z interface
+        if self._args.auth == 'keystone':
+            auth_svc = vnc_auth_keystone.AuthServiceKeystone(self, self._args)
+        else:
+            auth_svc = vnc_auth.AuthService(self, self._args)
+
+        self._pipe_start_app = auth_svc.get_middleware_app()
+        self._auth_svc = auth_svc
 
         # DB interface initialization
         if self._args.wipe_config:
@@ -1557,30 +1499,6 @@ class VncApiServer(object):
 
         self.re_uuid = re.compile('^[0-9A-F]{8}-?[0-9A-F]{4}-?4[0-9A-F]{3}-?[89AB][0-9A-F]{3}-?[0-9A-F]{12}$',
                                   re.IGNORECASE)
-
-        # Load extensions
-        self._extension_mgrs = {}
-        self._load_extensions()
-
-        # Authn/z interface
-        if self._args.auth == 'keystone':
-            auth_svc = vnc_auth_keystone.AuthServiceKeystone(self, self._args)
-        else:
-            auth_svc = vnc_auth.AuthService(self, self._args)
-
-        self._pipe_start_app = auth_svc.get_middleware_app()
-        self._auth_svc = auth_svc
-
-        if int(self._args.worker_id) == 0:
-            try:
-                self._extension_mgrs['resync'].map(
-                    self._resync_domains_projects)
-            except RuntimeError:
-                # lack of registered extension leads to RuntimeError
-                pass
-            except Exception as e:
-                err_msg = cfgm_common.utils.detailed_traceback()
-                self.config_log(err_msg, level=SandeshLevel.SYS_ERR)
 
         # following allowed without authentication
         self.white_list = [
@@ -1771,10 +1689,6 @@ class VncApiServer(object):
         return self._args.listen_port
     # end get_server_port
 
-    def get_worker_id(self):
-        return int(self._args.worker_id)
-    # end get_worker_id
-
     def get_pipe_start_app(self):
         return self._pipe_start_app
     # end get_pipe_start_app
@@ -1782,10 +1696,6 @@ class VncApiServer(object):
     def get_ifmap_health_check_interval(self):
         return float(self._args.ifmap_health_check_interval)
     # end get_ifmap_health_check_interval
-
-    def get_rabbit_health_check_interval(self):
-        return float(self._args.rabbit_health_check_interval)
-    # end get_rabbit_health_check_interval
 
     def is_auth_disabled(self):
         return self._args.auth is None
@@ -1852,15 +1762,6 @@ class VncApiServer(object):
     # end documentation_http_get
 
     def obj_perms_http_get(self):
-        if self.is_auth_disabled() or not self.is_multi_tenancy_set():
-            result = {
-                'token_info': None,
-                'is_cloud_admin_role': False,
-                'is_global_read_only_role': False,
-                'permissions': PERMS_RWX
-            }
-            return result
-
         if 'HTTP_X_USER_TOKEN' not in get_request().environ:
             raise cfgm_common.exceptions.HttpError(
                 400, 'User token needed for validation')
@@ -1886,16 +1787,6 @@ class VncApiServer(object):
         # roles in result['token_info']['access']['user']['roles']
         if token_info:
             result = {'token_info' : token_info}
-            # Handle v2 and v3 responses
-            roles_list = []
-            if 'access' in token_info:
-                roles_list = [roles['name'] for roles in \
-                    token_info['access']['user']['roles']]
-            elif 'token' in token_info:
-                roles_list = [roles['name'] for roles in \
-                    token_info['token']['roles']]
-            result['is_cloud_admin_role'] = self.cloud_admin_role in roles_list
-            result['is_global_read_only_role'] = self.global_read_only_role in roles_list
             if 'uuid' in get_request().query:
                 obj_uuid = get_request().query.uuid
                 result['permissions'] = self._permissions.obj_perms(get_request(), obj_uuid)
@@ -1974,7 +1865,7 @@ class VncApiServer(object):
         global_access = request_params.get('global_access')
 
         (ok, obj_dict) = self._db_conn.dbe_read(obj_type, {'uuid':obj_uuid},
-                             obj_fields=['perms2', 'is_shared'])
+                             obj_fields=['perms2'])
         obj_perms = obj_dict['perms2']
         old_perms = '%s/%d %d %s' % (obj_perms['owner'],
             obj_perms['owner_access'], obj_perms['global_access'],
@@ -2009,7 +1900,6 @@ class VncApiServer(object):
                 raise cfgm_common.exceptions.HttpError(
                     400, "Bad Request, invalid global_access value")
             obj_perms['global_access'] = global_access
-            obj_dict['is_shared'] = (global_access != 0)
 
         new_perms = '%s/%d %d %s' % (obj_perms['owner'],
             obj_perms['owner_access'], obj_perms['global_access'],
@@ -2610,7 +2500,6 @@ class VncApiServer(object):
 
         is_count = get_request().json.get('count', False)
         is_detail = get_request().json.get('detail', False)
-        include_shared = get_request().json.get('shared', False)
 
         try:
             filters = utils.get_filters(get_request().json.get('filters'))
@@ -2624,7 +2513,7 @@ class VncApiServer(object):
 
         return self._list_collection(r_class.object_type, parent_uuids,
                                      back_ref_uuids, obj_uuids, is_count,
-                                     is_detail, filters, req_fields, include_shared)
+                                     is_detail, filters, req_fields)
     # end list_bulk_collection_http_post
 
     # Private Methods
@@ -2657,7 +2546,6 @@ class VncApiServer(object):
                                          --disc_server_port 5998
                                          --worker_id 1
                                          --rabbit_max_pending_updates 4096
-                                         --rabbit_health_check_interval 120.0
                                          --cluster_id <testbed-name>
                                          [--auth keystone]
                                          [--ifmap_server_loc
@@ -2723,16 +2611,22 @@ class VncApiServer(object):
         cred = None
         if cassandra_user is not None and cassandra_password is not None:
             cred = {'username':cassandra_user,'password':cassandra_password}
-        self._db_conn = VncDbClient(
-            self, ifmap_ip, ifmap_port, user, passwd, cass_server_list,
-            rabbit_servers, rabbit_port, rabbit_user, rabbit_password,
-            rabbit_vhost, rabbit_ha_mode, reset_config, zk_server,
-            self._args.cluster_id, cassandra_credential=cred,
-            rabbit_use_ssl=self._args.rabbit_use_ssl,
-            kombu_ssl_version=self._args.kombu_ssl_version,
-            kombu_ssl_keyfile= self._args.kombu_ssl_keyfile,
-            kombu_ssl_certfile=self._args.kombu_ssl_certfile,
-            kombu_ssl_ca_certs=self._args.kombu_ssl_ca_certs)
+        db_conn = VncDbClient(self, ifmap_ip, ifmap_port, user, passwd,
+                              cass_server_list, rabbit_servers, rabbit_port,
+                              rabbit_user, rabbit_password, rabbit_vhost,
+                              rabbit_ha_mode, reset_config,
+                              zk_server, self._args.cluster_id,
+                              cassandra_credential=cred,
+                              rabbit_use_ssl = self._args.rabbit_use_ssl,
+                              kombu_ssl_version =
+                              self._args.kombu_ssl_version,
+                              kombu_ssl_keyfile =
+                              self._args.kombu_ssl_keyfile,
+                              kombu_ssl_certfile =
+                              self._args.kombu_ssl_certfile,
+                              kombu_ssl_ca_certs =
+                              self._args.kombu_ssl_ca_certs)
+        self._db_conn = db_conn
     # end _db_connect
 
     def _ensure_id_perms_present(self, obj_uuid, obj_dict):
@@ -2879,17 +2773,15 @@ class VncApiServer(object):
         self._create_singleton_entry(DiscoveryServiceAssignment())
         self._create_singleton_entry(GlobalQosConfig())
 
-        if int(self._args.worker_id) == 0:
-            self._db_conn.db_resync()
-
-        # make default ipam available across tenants for backward compatability
-        obj_type = 'network_ipam'
-        fq_name = ['default-domain', 'default-project', 'default-network-ipam']
-        obj_uuid = self._db_conn.fq_name_to_uuid(obj_type, fq_name)
-        (ok, obj_dict) = self._db_conn.dbe_read(obj_type, {'uuid':obj_uuid},
-                              obj_fields=['perms2'])
-        obj_dict['perms2']['global_access'] = cfgm_common.PERMS_RX
-        self._db_conn.dbe_update(obj_type, {'uuid': obj_uuid}, obj_dict)
+        self._db_conn.db_resync()
+        try:
+            self._extension_mgrs['resync'].map(self._resync_domains_projects)
+        except RuntimeError:
+            # lack of registered extension leads to RuntimeError
+            pass
+        except Exception as e:
+            err_msg = cfgm_common.utils.detailed_traceback()
+            self.config_log(err_msg, level=SandeshLevel.SYS_ERR)
     # end _db_init_entries
 
     # generate default rbac group rule
@@ -2996,7 +2888,7 @@ class VncApiServer(object):
     def _list_collection(self, obj_type, parent_uuids=None,
                          back_ref_uuids=None, obj_uuids=None,
                          is_count=False, is_detail=False, filters=None,
-                         req_fields=None, include_shared=False):
+                         req_fields=None):
         r_class = self.get_resource_class(obj_type)
         resource_type = r_class.resource_type
         (ok, result) = self._db_conn.dbe_list(obj_type,
@@ -3012,33 +2904,24 @@ class VncApiServer(object):
             return {'%ss' %(resource_type): {'count': result}}
 
         # include objects shared with tenant
-        if include_shared:
-            env = get_request().headers.environ
-            tenant_uuid = env.get('HTTP_X_PROJECT_ID')
-            domain = env.get('HTTP_X_DOMAIN_ID')
-            if domain is None:
-                domain = env.get('HTTP_X_USER_DOMAIN_ID')
-                try:
-                    domain = str(uuid.UUID(domain))
-                except ValueError:
-                    if domain == 'default':
-                        domain = 'default-domain'
-                    domain = self._db_conn.fq_name_to_uuid('domain', [domain])
-            if domain:
-                domain = domain.replace('-','')
-            shares = self._db_conn.get_shared_objects(obj_type, tenant_uuid, domain)
-            owned_objs = set([obj_uuid for (fq_name, obj_uuid) in result])
-            for (obj_uuid, obj_perm) in shares:
-                # skip owned objects already included in results
-                if obj_uuid in owned_objs:
-                    continue
-                try:
-                    fq_name = self._db_conn.uuid_to_fq_name(obj_uuid)
-                    result.append((fq_name, obj_uuid))
-                except NoIdError:
-                    # uuid no longer valid. Delete?
-                    pass
-        # end shared
+        env = get_request().headers.environ
+        tenant_uuid = env.get('HTTP_X_PROJECT_ID')
+        domain_uuid = env.get('HTTP_X_DOMAIN_ID')
+        # implicit access to default domain for keystone v2.0
+        if domain_uuid is None and self.keystone_version == 'v2.0':
+            domain_id = self._db_conn.fq_name_to_uuid('domain', ['default-domain'])
+        shares = self._db_conn.get_shared_objects(obj_type, tenant_uuid, domain_uuid) if tenant_uuid else []
+        owned_objs = set([obj_uuid for (fq_name, obj_uuid) in result])
+        for (obj_uuid, obj_perm) in shares:
+            # skip owned objects already included in results
+            if obj_uuid in owned_objs:
+                continue
+            try:
+                fq_name = self._db_conn.uuid_to_fq_name(obj_uuid)
+                result.append((fq_name, obj_uuid))
+            except NoIdError:
+                # uuid no longer valid. Delete?
+                pass
 
         fq_names_uuids = result
         obj_dicts = []
@@ -3071,8 +2954,6 @@ class VncApiServer(object):
                                 obj_dict[field] = obj_result[field]
                             except KeyError:
                                 pass
-
-                        obj_dict = self.obj_view(resource_type, obj_dict)
                         obj_dicts.append(obj_dict)
             else: # admin
                 obj_results = {}
@@ -3116,8 +2997,6 @@ class VncApiServer(object):
                 obj_dict['name'] = obj_result['fq_name'][-1]
                 obj_dict['href'] = self.generate_url(resource_type,
                                                      obj_result['uuid'])
-                if not self.is_admin_request():
-                    obj_result = self.obj_view(resource_type, obj_result)
                 obj_dict.update(obj_result)
                 if 'id_perms' not in obj_dict:
                     # It is possible that the object was deleted, but received
@@ -3305,7 +3184,7 @@ class VncApiServer(object):
             # parent uuid could be null for derived resources such as
             # routing-instance
             return (True, '')
-        return self._permissions.check_perms_delete(request, obj_type, uuid, parent_uuid)
+        return self._permissions.check_perms_write(request, parent_uuid)
     # end _http_delete_common
 
     def _http_post_validate(self, obj_type=None, obj_dict=None):
@@ -3570,10 +3449,6 @@ class VncApiServer(object):
             pass
         return k_v
 
-    @property
-    def global_read_only_role(self):
-        return self._args.global_read_only_role
-
     def publish_self_to_discovery(self):
         # publish API server
         data = {
@@ -3626,8 +3501,7 @@ def main(args_str=None, server=None):
 
     # Advertise services
     if (vnc_api_server._args.disc_server_ip and
-            vnc_api_server._args.disc_server_port and
-            vnc_api_server.get_worker_id() == 0):
+            vnc_api_server._args.disc_server_port):
         vnc_api_server.publish_self_to_discovery()
 
     """ @sigchld
@@ -3654,7 +3528,8 @@ def main(args_str=None, server=None):
 # end main
 
 def server_main(args_str=None):
-    vnc_cgitb.enable(format='text')
+    import cgitb
+    cgitb.enable(format='text')
 
     main(args_str, VncApiServer(args_str))
 #server_main

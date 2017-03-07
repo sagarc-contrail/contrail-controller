@@ -131,7 +131,6 @@ public:
         allow_route_add_on_deleted_vrf_ = val;
     }
     InetUnicastAgentRouteTable *GetInetUnicastRouteTable(const IpAddress &addr) const;
-    int RDInstanceId() const;
 
 private:
     friend class VrfTable;

@@ -18,7 +18,6 @@ typedef boost::array<GenDb::DbDataValue,
 
 typedef boost::function<void (const std::string&, const std::string&, int)>
     FlowFieldValuesCb;
-typedef boost::function<bool (std::auto_ptr<GenDb::ColList>)> DbInsertCb;
 
 void PopulateFlowIndexTableColumnValues(
     const std::vector<FlowRecordFields::type> &frvt,

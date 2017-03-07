@@ -11,9 +11,9 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/types.h>
-#include <sys/ipc.h>
-#include <sys/shm.h>
-#include <asm/types.h>
+//WINDOWS #include <sys/ipc.h>
+//WINDOWS #include <sys/shm.h>
+//WINDOWS #include <asm/types.h>
 #include <boost/asio.hpp>
 
 #include <base/timer.h>
@@ -30,7 +30,6 @@
 #include <ksync/ksync_netlink.h>
 #include <ksync/ksync_sock.h>
 #include <ksync/ksync_sock_user.h>
-#include <vrouter/flow_stats/flow_stats_collector.h>
 
 #include <vr_types.h>
 #include <nl_util.h>
@@ -94,11 +93,11 @@ void KSyncFlowMemory::InitFlowMem() {
     int encode_len, error, ret;
 
     assert((cl = nl_register_client()) != NULL);
-    assert(nl_socket(cl, AF_NETLINK, SOCK_DGRAM, NETLINK_GENERIC) > 0);
+    //WINDOWSFIX assert(nl_socket(cl, AF_NETLINK, SOCK_DGRAM, NETLINK_GENERIC) > 0);
     assert(nl_connect(cl, 0, 0) == 0);
     assert(vrouter_get_family_id(cl) > 0);
 
-    assert(nl_build_nlh(cl, cl->cl_genl_family_id, NLM_F_REQUEST) == 0);
+    //WINDOWSFIX assert(nl_build_nlh(cl, cl->cl_genl_family_id, NLM_F_REQUEST) == 0);
     assert(nl_build_genlh(cl, SANDESH_REQUEST, 0) == 0);
 
     attr_len = nl_get_attr_hdr_size();
@@ -126,7 +125,8 @@ void KSyncFlowMemory::InitFlowMem() {
     nl_free_client(cl);
 
     // Remove the existing /dev/flow file first. We will add it again below
-#if !defined(__FreeBSD__)
+	//WINDOWSFIX
+#if 0 //WINDOWSFIX !defined(__FreeBSD__)
     if (unlink("/dev/flow") != 0) {
         if (errno != ENOENT) {
             LOG(DEBUG, "Error deleting </dev/flow>. Error <" << errno
@@ -146,6 +146,7 @@ void KSyncFlowMemory::InitFlowMem() {
     }
 #endif
 
+#if 0 //WINDOWSFIX
     int fd;
     if ((fd = open("/dev/flow", O_RDONLY | O_SYNC)) < 0) {
         LOG(DEBUG, "Error opening device </dev/flow>. Error <" << errno
@@ -163,6 +164,7 @@ void KSyncFlowMemory::InitFlowMem() {
 
     flow_table_entries_count_ = flow_table_size_ / sizeof(vr_flow_entry);
     ksync_->agent()->set_flow_table_size(flow_table_entries_count_);
+#endif
     return;
 }
 
@@ -254,64 +256,14 @@ bool KSyncFlowMemory::GetFlowKey(uint32_t index, FlowKey *key) {
     return true;
 }
 
-bool KSyncFlowMemory::IsEvictionMarked(const vr_flow_entry *entry,
-                                       uint16_t flags) const {
+bool KSyncFlowMemory::IsEvictionMarked(const vr_flow_entry *entry) const {
     if (!entry) {
         return false;
     }
-    if (flags & VR_FLOW_FLAG_EVICTED) {
+    if (entry->fe_flags & VR_FLOW_FLAG_EVICTED) {
         return true;
     }
     return false;
-}
-
-const vr_flow_entry *KSyncFlowMemory::GetKFlowStats(const FlowKey &key,
-                                                    uint32_t idx,
-                                                    uint8_t gen_id,
-                                                    vr_flow_stats *stat) const {
-    const vr_flow_entry *kflow = GetValidKFlowEntry(key, idx, gen_id);
-    if (!kflow) {
-        return NULL;
-    }
-    *stat = kflow->fe_stats;
-    kflow = GetValidKFlowEntry(key, idx, gen_id);
-    return kflow;
-}
-
-void KSyncFlowMemory::ReadFlowInfo(const vr_flow_entry *kflow,
-                                   vr_flow_stats *stat, KFlowData *info) const {
-    *stat = kflow->fe_stats;
-    info->underlay_src_port = kflow->fe_udp_src_port;
-    info->tcp_flags = kflow->fe_tcp_flags;
-    info->flags = kflow->fe_flags;
-}
-
-const vr_flow_entry *KSyncFlowMemory::GetKFlowStatsAndInfo(const FlowKey &key,
-                                                           uint32_t idx,
-                                                           uint8_t gen_id,
-                                                           vr_flow_stats *stats,
-                                                           KFlowData *info)
-    const {
-    const vr_flow_entry *kflow = GetKernelFlowEntry(idx, false);
-    if (!kflow) {
-        return NULL;
-    }
-    if (key.protocol == IPPROTO_TCP) {
-        FlowKey rhs;
-        KFlow2FlowKey(kflow, &rhs);
-        if (!key.IsEqual(rhs)) {
-            return NULL;
-        }
-
-        ReadFlowInfo(kflow, stats, info);
-
-        if (kflow->fe_gen_id != gen_id) {
-            return NULL;
-        }
-    } else {
-        ReadFlowInfo(kflow, stats, info);
-    }
-    return kflow;
 }
 
 bool KSyncFlowMemory::AuditProcess() {
@@ -350,8 +302,8 @@ bool KSyncFlowMemory::AuditProcess() {
 
             FlowProto *proto = ksync_->agent()->pkt()->get_flow_proto();
             proto->CreateAuditEntry(key, flow_idx, gen_id);
-            LOG(DEBUG, "FlowAudit : Converting HOLD entry to short flow " <<
-                       "for index " << flow_idx);
+            AGENT_LOG(FlowLog, flow_idx, "FlowAudit : Converting HOLD entry"
+                      "to short flow");
         }
     }
 
@@ -374,6 +326,7 @@ bool KSyncFlowMemory::AuditProcess() {
 }
 
 void KSyncFlowMemory::GetFlowTableSize() {
+#if 0 //WINDOWSFIX
     struct nl_client *cl;
     vr_flow_req req;
     int attr_len;
@@ -381,7 +334,7 @@ void KSyncFlowMemory::GetFlowTableSize() {
 
     assert((cl = nl_register_client()) != NULL);
     cl->cl_genl_family_id = KSyncSock::GetNetlinkFamilyId();
-    assert(nl_build_nlh(cl, cl->cl_genl_family_id, NLM_F_REQUEST) == 0);
+    //WINDOWSFIX assert(nl_build_nlh(cl, cl->cl_genl_family_id, NLM_F_REQUEST) == 0);
     assert(nl_build_genlh(cl, SANDESH_REQUEST, 0) == 0);
 
     attr_len = nl_get_attr_hdr_size();
@@ -429,9 +382,11 @@ void KSyncFlowMemory::GetFlowTableSize() {
     KSyncSockNetlink::NetlinkDecoder(cl->cl_buf,
                                      KSyncSock::GetAgentSandeshContext());
     nl_free_client(cl);
+#endif
 }
 
 void KSyncFlowMemory::MapSharedMemory() {
+#if 0 //WINDOWSFIX
     GetFlowTableSize();
 
     int fd;
@@ -452,6 +407,7 @@ void KSyncFlowMemory::MapSharedMemory() {
 
     flow_table_entries_count_ = flow_table_size_ / sizeof(vr_flow_entry);
     ksync_->agent()->set_flow_table_size(flow_table_entries_count_);
+#endif
 }
 
 void vr_flow_req::Process(SandeshContext *context) {

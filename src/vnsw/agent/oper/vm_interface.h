@@ -8,7 +8,7 @@
 #include <oper/oper_dhcp_options.h>
 #include <oper/audit_list.h>
 #include <oper/ecmp_load_balance.h>
-
+#include "winutils.h"
 /////////////////////////////////////////////////////////////////////////////
 // Implementation of VM Port interfaces
 /////////////////////////////////////////////////////////////////////////////
@@ -91,12 +91,6 @@ public:
         GATEWAY,
         REMOTE_VM,
         SRIOV
-    };
-
-    enum ProxyArpMode {
-        PROXY_ARP_NONE,
-        PROXY_ARP_UNRESTRICTED,
-        PROXY_ARP_INVALID
     };
 
     struct ListEntry {
@@ -280,15 +274,13 @@ public:
         bool operator() (const AllowedAddressPair &lhs,
                          const AllowedAddressPair &rhs) const;
         bool IsLess(const AllowedAddressPair *rhs) const;
-        void Activate(VmInterface *interface, bool force_update,
-                      bool policy_change) const;
+        void Activate(VmInterface *interface, bool force_update) const;
         void DeActivate(VmInterface *interface) const;
         void L2Activate(VmInterface *interface, bool force_update,
                         bool policy_change, bool old_layer2_forwarding,
                         bool old_layer3_forwarding) const;
         void L2DeActivate(VmInterface *interface) const;
-        void CreateLabelAndNH(Agent *agent, VmInterface *interface,
-                              bool policy_change) const;
+        void CreateLabelAndNH(Agent *agent, VmInterface *interface) const;
 
         mutable std::string vrf_;
         IpAddress   addr_;
@@ -296,8 +288,7 @@ public:
         mutable bool ecmp_;
         MacAddress  mac_;
         mutable bool        l2_entry_installed_;
-        mutable bool        l3_ecmp_config_changed_;
-        mutable bool        l2_ecmp_config_changed_;
+        mutable bool        ecmp_config_changed_;
         mutable uint32_t    ethernet_tag_;
         mutable VrfEntryRef vrf_ref_;
         mutable IpAddress  service_ip_;
@@ -364,9 +355,10 @@ public:
         bool IsLess(const VrfAssignRule *rhs) const;
 
         const uint32_t id_;
-        mutable std::string vrf_name_;
-        mutable bool ignore_acl_;
-        mutable autogen::MatchConditionType match_condition_;
+        const std::string vrf_name_;
+        const VrfEntryRef vrf_;
+        bool ignore_acl_;
+        autogen::MatchConditionType match_condition_;
     };
     typedef std::set<VrfAssignRule, VrfAssignRule> VrfAssignRuleSet;
 
@@ -421,13 +413,12 @@ public:
         mutable uint8_t plen_;
         mutable bool ecmp_;
         mutable bool l2_installed_;
+        mutable bool old_ecmp_;
         mutable bool is_primary_;
         mutable bool is_service_health_check_ip_;
         mutable bool is_local_;
         mutable IpAddress old_tracking_ip_;
         mutable IpAddress tracking_ip_;
-        mutable bool l3_ecmp_mode_changed_;
-        mutable bool l2_ecmp_mode_changed_;
     };
     typedef std::set<InstanceIp, InstanceIp> InstanceIpSet;
 
@@ -480,7 +471,7 @@ public:
 
     enum Trace {
         ADD,
-        DELETE,
+        DEL,
         ACTIVATED_IPV4,
         ACTIVATED_IPV6,
         ACTIVATED_L2,
@@ -534,10 +525,6 @@ public:
         dhcp_enable_= dhcp_enable;
     }
     bool do_dhcp_relay() const { return do_dhcp_relay_; }
-    ProxyArpMode proxy_arp_mode() const { return proxy_arp_mode_; }
-    bool IsUnrestrictedProxyArp() const {
-        return proxy_arp_mode_ == PROXY_ARP_UNRESTRICTED;
-    }
     int vxlan_id() const { return vxlan_id_; }
     bool bridging() const { return bridging_; }
     bool layer3_forwarding() const { return layer3_forwarding_; }
@@ -709,8 +696,7 @@ public:
                                 const Ip4Address &new_addr,
                                 const Ip6Address &new_v6_addr,
                                 const MacAddress &mac,
-                                const IpAddress &dependent_ip,
-                                bool ecmp) const;
+                                const IpAddress &dependent_ip) const;
     uint32_t ethernet_tag() const {return ethernet_tag_;}
     IpAddress service_health_check_ip() const { return service_health_check_ip_; }
     void UpdateVxLan();
@@ -723,10 +709,6 @@ public:
 
     bool is_vn_qos_config() const {
         return is_vn_qos_config_;
-    }
-
-    const NextHop* l3_interface_nh_no_policy() const {
-        return l3_interface_nh_no_policy_.get();
     }
 
 private:
@@ -917,8 +899,6 @@ private:
     bool dhcp_enable_;
     // true if IP is to be obtained from DHCP Relay and not learnt from fabric
     bool do_dhcp_relay_; 
-    // Proxy ARP mode for interface
-    ProxyArpMode proxy_arp_mode_;
     // VM-Name. Used by DNS
     std::string vm_name_;
     // project uuid of the vm to which the interface belongs
@@ -1115,7 +1095,6 @@ struct VmInterfaceConfigData : public VmInterfaceData {
     bool ecmp_;
     bool ecmp6_;
     bool dhcp_enable_; // is DHCP enabled for the interface (from subnet config)
-    VmInterface::ProxyArpMode proxy_arp_mode_;
     bool admin_state_;
     bool disable_policy_;
     std::string analyzer_name_;

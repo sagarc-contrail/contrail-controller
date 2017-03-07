@@ -22,7 +22,6 @@ from cfgm_common import exceptions as vnc_exc
 from vnc_api.vnc_api import *
 from cfgm_common import SG_NO_RULE_FQ_NAME, SG_NO_RULE_NAME, UUID_PATTERN
 import vnc_openstack
-from context import get_context
 
 _DEFAULT_HEADERS = {
     'Content-type': 'application/json; charset="UTF-8"', }
@@ -37,23 +36,6 @@ DELETE = 4
 _IFACE_ROUTE_TABLE_NAME_PREFIX = 'NEUTRON_IFACE_RT'
 _IFACE_ROUTE_TABLE_NAME_PREFIX_REGEX = re.compile(
     '%s_%s_%s' % (_IFACE_ROUTE_TABLE_NAME_PREFIX, UUID_PATTERN, UUID_PATTERN))
-
-class LocalVncApi(VncApi):
-    def _request(self, *args, **kwargs):
-        # always pass contextual user_token aka mux connection to api-server
-        try:
-            if 'X-AUTH-TOKEN' in self._headers:
-                orig_user_token = self._headers['X-AUTH-TOKEN']
-                had_user_token = True
-                self._headers['X-AUTH-TOKEN'] = get_context().user_token
-            else:
-                had_user_token = False
-            return super(LocalVncApi, self)._request(*args, **kwargs)
-        finally:
-            if had_user_token:
-                self._headers['X-AUTH-TOKEN'] = orig_user_token
-    # end _request
-# end class LocalVncApi
 
 class DBInterface(object):
     """
@@ -83,7 +65,7 @@ class DBInterface(object):
         while not connected:
             try:
                 # TODO remove hardcode
-                self._vnc_lib = LocalVncApi(admin_name, admin_password,
+                self._vnc_lib = VncApi(admin_name, admin_password,
                                        admin_tenant_name, api_srvr_ip,
                                        api_srvr_port, '/', user_info=user_info)
                 self._connected_to_api_server.set()
@@ -120,15 +102,12 @@ class DBInterface(object):
             request.body, {'Content-type': request.environ['CONTENT_TYPE']})
     #end _relay_request
 
-    def _validate_project_ids(self, context=None, filters=None):
+    def _validate_project_ids(self, context=None, project_ids=None):
         if context and not context['is_admin']:
-            return [str(uuid.UUID(context['tenant']))]
-
-        if not filters.get('tenant_id'):
-            return None
+            return [context['tenant']]
 
         return_project_ids = []
-        for project_id in filters.get('tenant_id'):
+        for project_id in project_ids or []:
             try:
                 return_project_ids.append(str(uuid.UUID(project_id)))
             except ValueError:
@@ -248,8 +227,9 @@ class DBInterface(object):
             except IndexError:
                 rule_uuid = None
             self._raise_contrail_exception('SecurityGroupRuleExists',
-                resource='security_group_rule', id=rule_uuid, rule_id=rule_uuid)
-    # end _security_group_rule_create
+                resource='security_group_rule', id=rule_uuid)
+        return
+    #end _security_group_rule_create
 
     def _security_group_rule_find(self, sgr_id, project_uuid=None):
         # Get all security group for a project if project uuid is specified
@@ -339,7 +319,29 @@ class DBInterface(object):
         except (PermissionDenied, RefsExistError) as e:
             self._raise_contrail_exception('BadRequest',
                 resource='network', msg=str(e))
-    # end _virtual_network_update
+
+        # read back to get subnet gw allocated by api-server
+        fq_name_str = json.dumps(net_obj.get_fq_name())
+    #end _virtual_network_update
+
+    def _virtual_network_delete(self, net_id):
+        fq_name_str = None
+        try:
+            net_obj = self._vnc_lib.virtual_network_read(id=net_id)
+            fq_name_str = json.dumps(net_obj.get_fq_name())
+        except NoIdError:
+            return
+
+        try:
+            if net_obj.get_floating_ip_pools():
+                fip_pools = net_obj.get_floating_ip_pools()
+                for fip_pool in fip_pools:
+                    self._floating_ip_pool_delete(fip_pool_id=fip_pool['uuid'])
+
+            self._vnc_lib.virtual_network_delete(id=net_id)
+        except RefsExistError:
+            self._raise_contrail_exception('NetworkInUse', net_id=net_id)
+    #end _virtual_network_delete
 
     def _virtual_network_list(self, parent_id=None, obj_uuids=None,
                               fields=None, detail=False, count=False,
@@ -574,7 +576,8 @@ class DBInterface(object):
 
     def _logical_router_update(self, rtr_obj):
         self._vnc_lib.logical_router_update(rtr_obj)
-    # end _logical_router_update
+        fq_name_str = json.dumps(rtr_obj.get_fq_name())
+    #end _logical_router_update
 
     def _logical_router_delete(self, rtr_id):
         try:
@@ -1278,9 +1281,6 @@ class DBInterface(object):
                     # TODO add route table specific exception
                     self._raise_contrail_exception('NetworkNotFound',
                                                    net_id=net_obj.uuid)
-        if oper == CREATE or oper == UPDATE:
-            if 'port_security_enabled' in network_q:
-                net_obj.set_port_security_enabled(network_q['port_security_enabled'])
 
         return net_obj
     #end _network_neutron_to_vnc
@@ -1351,7 +1351,6 @@ class DBInterface(object):
 
         if self._contrail_extensions_enabled:
             net_q_dict.update(extra_dict)
-        net_q_dict['port_security_enabled'] = net_obj.get_port_security_enabled()
 
         return net_q_dict
     #end _network_vnc_to_neutron
@@ -1816,6 +1815,13 @@ class DBInterface(object):
                 mac_addrs_obj = MacAddressesType()
                 mac_addrs_obj.set_mac_address([port_q['mac_address']])
                 port_obj.set_virtual_machine_interface_mac_addresses(mac_addrs_obj)
+            port_obj.set_security_group_list([])
+            if ('security_groups' not in port_q or
+                port_q['security_groups'].__class__ is object):
+                id_perms = IdPermsType(enable=True,
+                                       description=vnc_openstack.DEFAULT_SECGROUP_DESCRIPTION)
+                sg_obj = SecurityGroup("default", proj_obj, id_perms=id_perms)
+                port_obj.add_security_group(sg_obj)
         else:  # READ/UPDATE/DELETE
             port_obj = self._virtual_machine_interface_read(port_id=port_q['id'])
             project_id = self._get_obj_tenant_id('port', port_obj.get_uuid())
@@ -1850,61 +1856,18 @@ class DBInterface(object):
                 port_obj.add_virtual_machine_interface_bindings(
                     KeyValuePair(key=k, value=v))
 
-        if oper == CREATE:
-            if 'port_security_enabled' in port_q:
-                port_security = port_q['port_security_enabled']
-            else:
-                port_security = net_obj.get_port_security_enabled()
-            port_obj.set_port_security_enabled(port_security)
-            if ('security_groups' in port_q and
-                port_q['security_groups'].__class__ is not object):
-                if not port_security and port_q['security_groups']:
-                    self._raise_contrail_exception('PortSecurityPortHasSecurityGroup', port_id=port_obj.uuid)
-
-                port_obj.set_security_group_list([])
-                for sg_id in port_q.get('security_groups') or []:
-                    # TODO optimize to not read sg (only uuid/fqn needed)
-                    sg_obj = self._vnc_lib.security_group_read(id=sg_id)
-                    port_obj.add_security_group(sg_obj)
-
-                # When there is no-security-group for a port,the internal
-                # no_rule group should be used.
-                if port_security and not port_q['security_groups']:
-                    sg_obj = self._get_no_rule_security_group()
-                    port_obj.add_security_group(sg_obj)
-            elif port_security:
-                sg_obj = SecurityGroup("default", proj_obj)
+        if 'security_groups' in port_q:
+            port_obj.set_security_group_list([])
+            for sg_id in port_q.get('security_groups') or []:
+                # TODO optimize to not read sg (only uuid/fqn needed)
+                sg_obj = self._vnc_lib.security_group_read(id=sg_id)
                 port_obj.add_security_group(sg_obj)
-        elif oper == UPDATE:
-            if 'port_security_enabled' in port_q:
-                port_obj.set_port_security_enabled(port_q['port_security_enabled'])
-            port_security = port_obj.get_port_security_enabled()
-            if port_security:
-                if ('security_groups' in port_q and
-                    port_q['security_groups'].__class__ is not object):
-                    port_obj.set_security_group_list([])
-                    if not port_q['security_groups']:
-                        sg_obj = self._get_no_rule_security_group()
-                        port_obj.add_security_group(sg_obj)
-                    else:
-                        for sg_id in port_q.get('security_groups') or []:
-                            # TODO optimize to not read sg (only uuid/fqn needed)
-                            sg_obj = self._vnc_lib.security_group_read(id=sg_id)
-                            port_obj.add_security_group(sg_obj)
-            else:
-                if ('security_groups' in port_q and
-                    port_q['security_groups'].__class__ is not object and
-                    port_q['security_groups']):
-                    self._raise_contrail_exception('PortSecurityAndIPRequiredForSecurityGroups', port_id=port_obj.uuid)
-                port_sg_refs = port_obj.get_security_group_refs()
-                if port_sg_refs:
-                    if 'security_groups' in port_q and not port_q['security_groups']:
-                        # reset all SG on the port
-                        port_obj.set_security_groups_list([])
-                    elif len(port_sg_refs) == 1 and port_sg_refs[0]['to'] == SG_NO_RULE_FQ_NAME:
-                        port_obj.set_security_groups_list([])
-                    else:
-                        self._raise_contrail_exception('PortSecurityPortHasSecurityGroup', port_id=port_obj.uuid)
+
+            # When there is no-security-group for a port,the internal
+            # no_rule group should be used.
+            if not port_q['security_groups']:
+                sg_obj = self._get_no_rule_security_group()
+                port_obj.add_security_group(sg_obj)
 
         id_perms = port_obj.get_id_perms()
         if 'admin_state_up' in port_q:
@@ -2143,10 +2106,7 @@ class DBInterface(object):
                     except NoIdError:
                         continue
 
-                if ip_obj.get_instance_ip_secondary():
-                    continue
-
-                if ip_obj.get_service_health_check_ip():
+                if ip_obj.get_service_instance_ip() and ip_obj.get_instance_ip_secondary():
                     continue
 
                 ip_addr = ip_obj.get_instance_ip_address()
@@ -2195,7 +2155,7 @@ class DBInterface(object):
 
         if self._contrail_extensions_enabled:
             port_q_dict.update(extra_dict)
-        port_q_dict['port_security_enabled'] = port_obj.get_port_security_enabled()
+
         return port_q_dict
     #end _port_vnc_to_neutron
 
@@ -2464,24 +2424,8 @@ class DBInterface(object):
 
     @wait_for_api_server_connection
     def network_delete(self, net_id):
-        try:
-            net_obj = self._vnc_lib.virtual_network_read(id=net_id)
-        except NoIdError:
-            return
-
-        try:
-            fip_pools = net_obj.get_floating_ip_pools()
-            for fip_pool in fip_pools or []:
-                fip_pool_obj = self._vnc_lib.floating_ip_pool_read(id=fip_pool['uuid'])
-                fips = fip_pool_obj.get_floating_ips()
-                for fip in fips or []:
-                    self.floatingip_delete(fip_id=fip['uuid'])
-                self._floating_ip_pool_delete(fip_pool_id=fip_pool['uuid'])
-
-            self._vnc_lib.virtual_network_delete(id=net_id)
-        except RefsExistError:
-            self._raise_contrail_exception('NetworkInUse', net_id=net_id)
-    # end network_delete
+        self._virtual_network_delete(net_id=net_id)
+    #end network_delete
 
     # TODO request based on filter contents
     @wait_for_api_server_connection
@@ -2538,7 +2482,8 @@ class DBInterface(object):
                 _collect_without_prune(filters['id'])
             else:
                 # read all networks in project, and prune below
-                for p_id in self._validate_project_ids(context, filters) or []:
+                proj_ids = self._validate_project_ids(context, filters['tenant_id'])
+                for p_id in proj_ids:
                     all_net_objs.extend(self._network_list_project(p_id))
                 if 'router:external' in filters:
                     all_net_objs.extend(self._network_list_router_external())
@@ -2966,7 +2911,9 @@ class DBInterface(object):
         # collect phase
         all_ipams = []  # all ipams in all projects
         if filters and 'tenant_id' in filters:
-            for p_id in self._validate_project_ids(context, filters) or []:
+            project_ids = self._validate_project_ids(context,
+                                                     filters['tenant_id'])
+            for p_id in project_ids:
                 project_ipams = self._ipam_list_project(p_id)
                 all_ipams.append(project_ipams)
         else:  # no filters
@@ -3054,7 +3001,9 @@ class DBInterface(object):
         # collect phase
         all_policys = []  # all policys in all projects
         if filters and 'tenant_id' in filters:
-            for p_id in self._validate_project_ids(context, filters) or []:
+            project_ids = self._validate_project_ids(context,
+                                                     filters['tenant_id'])
+            for p_id in project_ids:
                 project_policys = self._policy_list_project(p_id)
                 all_policys.append(project_policys)
         else:  # no filters
@@ -3212,7 +3161,9 @@ class DBInterface(object):
                         pass
             else:
                 # read all routers in project, and prune below
-                for p_id in self._validate_project_ids(context, filters) or []:
+                project_ids = self._validate_project_ids(context,
+                                                         filters['tenant_id'])
+                for p_id in project_ids:
                     if 'router:external' in filters:
                         all_rtrs.append(self._fip_pool_ref_routers(p_id))
                     else:
@@ -3488,14 +3439,14 @@ class DBInterface(object):
         backref_ids = None
         if filters:
             if 'id' in filters:
-                fip_ids = [str(uuid.UUID(fid)) for fid in filters['id']]
+                fip_ids = filters['id']
             if 'tenant_id' in filters:
-                backref_ids = self._validate_project_ids(context, filters)
-                proj_ids = backref_ids or []
+                backref_ids = self._validate_project_ids(context,
+                                                         filters['tenant_id'])
+                proj_ids = backref_ids
             if 'port_id' in filters:
-                port_ids = [str(uuid.UUID(pid)) for pid in filters['port_id']]
-                if len(port_ids) > 0:
-                    backref_ids = port_ids
+                backref_ids = backref_ids or [] + filters['port_id']
+                port_ids = backref_ids
         else:  # no filters
             if not context['is_admin']:
                 backref_ids = [str(uuid.UUID(context['tenant']))]
@@ -3510,7 +3461,7 @@ class DBInterface(object):
                     continue
             # if filters has both id and tenant_id, api-server would
             # have returned ORed value, neutron expects ANDed
-            if filters and 'id' in filters and fip_obj.uuid not in fip_ids:
+            if not self._filters_is_present(filters, 'id', fip_obj.uuid):
                 continue
             if filters and 'tenant_id' in filters:
                 if not fip_obj.get_project_refs():
@@ -3552,7 +3503,7 @@ class DBInterface(object):
         return ip_addr in net_ip_list
 
     def _create_instance_ip(self, net_obj, port_obj, ip_addr=None,
-                            subnet_uuid=None, ip_family=None):
+                            subnet_uuid=None, ip_family="v4"):
         ip_name = str(uuid.uuid4())
         ip_obj = InstanceIp(name=ip_name)
         ip_obj.uuid = ip_name
@@ -3571,7 +3522,7 @@ class DBInterface(object):
         return ip_id
     # end _create_instance_ip
 
-    def _port_create_instance_ip(self, net_obj, port_obj, port_q, ip_family=None):
+    def _port_create_instance_ip(self, net_obj, port_obj, port_q, ip_family="v4"):
         fixed_ips = port_q.get('fixed_ips')
         if fixed_ips is None:
             return
@@ -3811,51 +3762,18 @@ class DBInterface(object):
             'network:dhcp' in filters.get('device_owner', [])):
              return []
 
-        project_ids = self._validate_project_ids(context, filters)
+        project_ids = self._validate_project_ids(context,
+                                                 filters.get('tenant_id'))
+        if not project_ids:
+            project_ids = None
 
         port_objs = []
         if filters.get('device_id'):
-            back_ref_ids = filters.get('device_id')
-            if filters.get('network_id'):
-                back_ref_ids += filters.get('network_id')
             # Get all VM port
             port_objs_filtered_by_device_id =\
                 self._virtual_machine_interface_list(
                     obj_uuids=filters.get('id'),
-                    back_ref_id=back_ref_ids)
-
-            port_objs_filtered_by_device_id = []
-            founded_device_ids = set()
-            for vmi_obj in self._virtual_machine_interface_list(
-                    obj_uuids=filters.get('id'),
-                    back_ref_id=back_ref_ids):
-                for device_ref in vmi_obj.get_virtual_machine_refs() or [] +\
-                        vmi_obj.get_logical_router_back_refs() or []:
-                    if device_ref['uuid'] in filters.get('device_id'):
-                        port_objs_filtered_by_device_id.append(vmi_obj)
-                        founded_device_ids.add(device_ref['uuid'])
-
-            # If some device ids not yet found look to router interfaces
-            not_found_device_ids = set(filters.get('device_id')) -\
-                founded_device_ids
-            if not_found_device_ids:
-                # Port has a back_ref to logical router, so need to read in
-                # logical routers based on device ids
-                router_objs = self._logical_router_list(
-                    obj_uuids=list(not_found_device_ids),
-                    parent_id=project_ids,
-                    back_ref_id=filters.get('network_id'),
-                    fields=['virtual_machine_interface_back_refs'])
-                router_port_ids = [
-                    vmi_ref['uuid']
-                    for router_obj in router_objs
-                    for vmi_ref in
-                    router_obj.get_virtual_machine_interface_refs() or []
-                ]
-                # Read all logical router ports and add it to the list
-                if router_port_ids:
-                    port_objs.extend(self._virtual_machine_interface_list(
-                        obj_uuids=router_port_ids, parent_id=project_ids))
+                    back_ref_id=filters.get('device_id'))
 
             # Filter it with project ids if there are.
             if project_ids:
@@ -3863,11 +3781,28 @@ class DBInterface(object):
                                   if p.parent_uuid in project_ids])
             else:
                 port_objs.extend(port_objs_filtered_by_device_id)
+
+            # Port has a back_ref to logical router, so need to read in
+            # logical routers based on device ids
+            router_objs = self._logical_router_list(
+                obj_uuids=filters.get('device_id'),
+                parent_id=project_ids,
+                fields=['virtual_machine_interface_back_refs'])
+            router_port_ids = [
+                vmi_ref['uuid']
+                for router_obj in router_objs
+                for vmi_ref in
+                router_obj.get_virtual_machine_interface_refs() or []
+            ]
+            # Read all logical router ports and add it to the list
+            if router_port_ids:
+                port_objs.extend(self._virtual_machine_interface_list(
+                                     obj_uuids=router_port_ids,
+                                     parent_id=project_ids))
         else:
             port_objs = self._virtual_machine_interface_list(
                 obj_uuids=filters.get('id'),
-                parent_id=project_ids,
-                back_ref_id=filters.get('network_id'))
+                parent_id=project_ids)
 
         neutron_ports = self._port_list(port_objs)
 
@@ -3882,6 +3817,9 @@ class DBInterface(object):
             if ('fixed_ips' in filters and
                 not self._port_fixed_ips_is_present(filters['fixed_ips'],
                                                     neutron_port['fixed_ips'])):
+                continue
+            if not self._filters_is_present(filters,'network_id',
+                                            neutron_port['network_id']):
                 continue
 
             ret_list.append(neutron_port)
@@ -4014,7 +3952,9 @@ class DBInterface(object):
             all_sgs.append(project_sgs)
         else: # admin context
             if filters and 'tenant_id' in filters:
-                for p_id in self._validate_project_ids(context, filters) or []:
+                project_ids = self._validate_project_ids(context,
+                                                         filters['tenant_id'])
+                for p_id in project_ids:
                     project_sgs = self._security_group_list_project(p_id, filters)
                     all_sgs.append(project_sgs)
             else:  # no tenant_id filter
@@ -4138,7 +4078,9 @@ class DBInterface(object):
         # collect phase
         all_sgs = []
         if filters and 'tenant_id' in filters:
-            for p_id in self._validate_project_ids(context, filters) or []:
+            project_ids = self._validate_project_ids(context,
+                                                     filters['tenant_id'])
+            for p_id in project_ids:
                 project_sgs = self._security_group_list_project(p_id, filters)
                 all_sgs.append(project_sgs)
         else:  # no filters
@@ -4208,7 +4150,9 @@ class DBInterface(object):
         # collect phase
         all_rts = []  # all rts in all projects
         if filters and 'tenant_id' in filters:
-            for p_id in self._validate_project_ids(context, filters) or []:
+            project_ids = self._validate_project_ids(context,
+                                                     filters['tenant_id'])
+            for p_id in project_ids:
                 project_rts = self._route_table_list_project(p_id)
                 all_rts.append(project_rts)
         elif filters and 'name' in filters:
@@ -4276,7 +4220,9 @@ class DBInterface(object):
         # collect phase
         all_sis = []  # all sis in all projects
         if filters and 'tenant_id' in filters:
-            for p_id in self._validate_project_ids(context, filters) or []:
+            project_ids = self._validate_project_ids(context,
+                                                     filters['tenant_id'])
+            for p_id in project_ids:
                 project_sis = self._svc_instance_list_project(p_id)
                 all_sis.append(project_sis)
         elif filters and 'name' in filters:

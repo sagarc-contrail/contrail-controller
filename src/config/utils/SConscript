@@ -47,9 +47,6 @@ utils_scripts = [
   'provision_config_node.py',
   'discovery_cli.py',
   'provision_user_defined_log_statistics.py',
-  'contrail-diff-docs.py',
-  'provision_issu.py',
-  'issu_process.sh',
 ]
 
 for utils in utils_scripts:

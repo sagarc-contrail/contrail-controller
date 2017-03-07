@@ -27,9 +27,6 @@ import requests
 import gevent.wsgi
 import uuid
 
-from cfgm_common import vnc_cgitb
-
-
 def lineno():
     """Returns the current line number in our program."""
     return inspect.currentframe().f_back.f_lineno
@@ -106,7 +103,8 @@ def launch_disc_server(listen_ip, listen_port, http_server_port, conf_sections):
     args_str = args_str + "--log_local "
     args_str = args_str + "--log_file discovery_server_sandesh.log "
 
-    vnc_cgitb.enable(format='text')
+    import cgitb
+    cgitb.enable(format='text')
 
     with tempfile.NamedTemporaryFile() as conf, tempfile.NamedTemporaryFile() as logconf:
         cfg_parser = generate_conf_file_contents(conf_sections)
@@ -165,11 +163,12 @@ class TestCase(testtools.TestCase, fixtures.TestWithFixtures):
         }
 
     def _add_detailed_traceback(self, exc_info):
-        vnc_cgitb.enable(format='text')
+        import cgitb
+        cgitb.enable(format='text')
         from cStringIO  import StringIO
 
         tmp_file = StringIO()
-        vnc_cgitb.Hook(format="text", file=tmp_file).handle(exc_info)
+        cgitb.Hook(format="text", file=tmp_file).handle(exc_info)
         tb_str = tmp_file.getvalue()
         tmp_file.close()
         self.addDetail('detailed-traceback', content.text_content(tb_str))

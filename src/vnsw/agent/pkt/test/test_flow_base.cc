@@ -45,10 +45,6 @@ struct TestFlowKey {
 #define vm_a_ip "16.1.1.1"
 #define vm_b_ip "16.1.1.2"
 
-#define remote_vm1_ip_5 "11.1.1.5"
-#define remote_vm1_ip_subnet "11.1.1.0"
-#define remote_vm1_ip_plen 24
-
 int fd_table[MAX_VNET];
 InetInterface *vhost;
 struct PortInfo input[] = {
@@ -165,42 +161,31 @@ public:
         EXPECT_TRUE(RouteFind(vrf, addr, 32));
     }
 
-    void CreateRemoteRoute(const char *vrf, const char *remote_vm, uint8_t plen,
+    void CreateRemoteRoute(const char *vrf, const char *remote_vm, 
                            const char *serv, int label, const char *vn) {
         Ip4Address addr = Ip4Address::from_string(remote_vm);
         Ip4Address gw = Ip4Address::from_string(serv);
-        Inet4TunnelRouteAdd(peer_, vrf, addr, plen, gw, TunnelType::MplsType(),
+        Inet4TunnelRouteAdd(peer_, vrf, addr, 32, gw, TunnelType::MplsType(),
                             label, vn, SecurityGroupList(), PathPreference());
         client->WaitForIdle(2);
-        WAIT_FOR(1000, 500, (RouteFind(vrf, addr, plen) == true));
-    }
-    void CreateRemoteRoute(const char *vrf, const char *remote_vm,
-                           const char *serv, int label, const char *vn) {
-        CreateRemoteRoute(vrf, remote_vm, 32, serv, label, vn);
-    }
-    void DeleteRoute(const char *vrf, const char *ip, uint8_t plen) {
-        Ip4Address addr = Ip4Address::from_string(ip);
-        agent()->fabric_inet4_unicast_table()->DeleteReq(agent()->local_peer(),
-                                                vrf, addr, plen, NULL);
-        client->WaitForIdle();
-        WAIT_FOR(1000, 1, (RouteFind(vrf, addr, plen) == false));
+        WAIT_FOR(1000, 500, (RouteFind(vrf, addr, 32) == true));
     }
 
-    void DeleteRemoteRoute(const char *vrf, const char *ip, uint8_t plen) {
+    void DeleteRoute(const char *vrf, const char *ip) {
         Ip4Address addr = Ip4Address::from_string(ip);
-        agent()->fabric_inet4_unicast_table()->DeleteReq(peer_, 
-                vrf, addr, plen,
-                new ControllerVmRoute(static_cast<BgpPeer *>(peer_)));
+        agent()->fabric_inet4_unicast_table()->DeleteReq(agent()->local_peer(),
+                                                vrf, addr, 32, NULL);
         client->WaitForIdle();
         WAIT_FOR(1000, 1, (RouteFind(vrf, addr, 32) == false));
     }
 
-    void DeleteRoute(const char *vrf, const char *ip) {
-        DeleteRoute(vrf, ip, 32);
-    }
-
     void DeleteRemoteRoute(const char *vrf, const char *ip) {
-        DeleteRemoteRoute(vrf, ip, 32);
+        Ip4Address addr = Ip4Address::from_string(ip);
+        agent()->fabric_inet4_unicast_table()->DeleteReq(peer_, 
+                vrf, addr, 32,
+                new ControllerVmRoute(static_cast<BgpPeer *>(peer_)));
+        client->WaitForIdle();
+        WAIT_FOR(1000, 1, (RouteFind(vrf, addr, 32) == false));
     }
 
     static void FlowAdd(int hash_id, int vrf, const char *sip, const char *dip,

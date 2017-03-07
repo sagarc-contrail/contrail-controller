@@ -10,6 +10,8 @@ import uuid
 import logging
 import coverage
 
+import cgitb
+cgitb.enable(format='text')
 
 import testtools
 from testtools.matchers import Equals, MismatchError, Not, Contains
@@ -30,8 +32,6 @@ from vnc_api.gen.resource_test import *
 from netaddr import IPNetwork, IPAddress
 
 import cfgm_common
-from cfgm_common import vnc_cgitb
-vnc_cgitb.enable(format='text')
 
 sys.path.append('../common/tests')
 from test_utils import *

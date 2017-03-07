@@ -1,6 +1,8 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
+#include <boost/asio.hpp>
+#include <windows.h>
 
 #include <vector>
 #include <bitset>
@@ -151,6 +153,7 @@ FlowEntry *FlowTable::Locate(FlowEntry *flow, uint64_t time) {
     ret = flow_entry_map_.insert(FlowEntryMapPair(flow->key(), flow));
     if (ret.second == true) {
         agent_->stats()->incr_flow_created();
+        agent_->stats()->UpdateFlowAddMinMaxStats(time);
         ret.first->second->set_on_tree();
         return flow;
     }
@@ -319,6 +322,7 @@ void FlowTable::DeleteInternal(FlowEntry *fe, uint64_t time,
     DeleteKSync(fe);
 
     agent_->stats()->incr_flow_aged();
+    agent_->stats()->UpdateFlowDelMinMaxStats(time);
 }
 
 bool FlowTable::DeleteFlows(FlowEntry *flow, FlowEntry *rflow) {
@@ -754,8 +758,7 @@ void FlowTable::ProcessKSyncFlowEvent(const FlowEventKSync *req,
             mgr->FlowStatsUpdateEvent(evicted_flow.get(),
                                       req->evict_flow_bytes(),
                                       req->evict_flow_packets(),
-                                      req->evict_flow_oflow(),
-                                      evicted_flow->uuid());
+                                      req->evict_flow_oflow());
         }
     }
 

@@ -555,6 +555,7 @@ void GlobalVrouter::GlobalVrouterConfig(DBTablePartBase *partition,
 
     //Rebakes
     if (resync_route) {
+        AGENT_LOG(GlobalVrouterLog, "Rebake all routes");
         //Resync vm_interfaces to handle ethernet tag change if vxlan changed to
         //mpls or vice versa.
         //Update all routes irrespectively as this will handle change of

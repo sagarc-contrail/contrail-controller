@@ -24,7 +24,6 @@ import discoveryclient.client as disc_client
 import cfgm_common.zkclient
 from cfgm_common.uve.vnc_api.ttypes import VncApiConfigLog
 from cfgm_common import imid
-from cfgm_common import vnc_cgitb
 from cfgm_common.utils import cgitb_hook
 
 from test_utils import *
@@ -149,7 +148,8 @@ def launch_disc_server(test_id, listen_ip, listen_port, http_server_port, conf_s
     args_str = args_str + "--log_local "
     args_str = args_str + "--log_file discovery_server_%s.log " % test_id
 
-    vnc_cgitb.enable(format='text')
+    import cgitb
+    cgitb.enable(format='text')
 
     with tempfile.NamedTemporaryFile() as conf, tempfile.NamedTemporaryFile() as logconf:
         cfg_parser = generate_conf_file_contents(conf_sections)
@@ -239,10 +239,10 @@ def launch_api_server(test_id, listen_ip, listen_port, http_server_port,
     args_str = args_str + "--log_local "
     args_str = args_str + "--log_file api_server_%s.log " %(test_id)
 
-    vnc_cgitb.enable(format='text')
+    import cgitb
+    cgitb.enable(format='text')
 
-    with tempfile.NamedTemporaryFile() as conf, \
-         tempfile.NamedTemporaryFile() as logconf:
+    with tempfile.NamedTemporaryFile() as conf, tempfile.NamedTemporaryFile() as logconf:
         cfg_parser = generate_conf_file_contents(conf_sections)
         cfg_parser.write(conf)
         conf.flush()
@@ -306,6 +306,21 @@ def launch_device_manager(test_id, api_server_ip, api_server_port):
     args_str = args_str + "--log_file device_manager_%s.log " %(test_id)
     device_manager.main(args_str)
 # end launch_device_manager
+
+@contextlib.contextmanager
+def flexmocks(mocks):
+    orig_values = {}
+    try:
+        for cls, method_name, val in mocks:
+            kwargs = {method_name: val}
+            # save orig cls.method_name
+            orig_values[(cls, method_name)] = getattr(cls, method_name)
+            flexmock(cls, **kwargs)
+        yield
+    finally:
+        for (cls, method_name), method in orig_values.items():
+            setattr(cls, method_name, method)
+# end flexmocks
 
 @contextlib.contextmanager
 def flexmocks(mocks):
@@ -434,7 +449,8 @@ class TestCase(testtools.TestCase, fixtures.TestWithFixtures):
         self.addOnException(self._add_detailed_traceback)
 
     def _add_detailed_traceback(self, exc_info):
-        vnc_cgitb.enable(format='text')
+        import cgitb
+        cgitb.enable(format='text')
         from cStringIO  import StringIO
 
         tmp_file = StringIO()
@@ -564,6 +580,7 @@ class TestCase(testtools.TestCase, fixtures.TestWithFixtures):
 
         cfgm_common.zkclient.LOG_DIR = './'
         gevent.wsgi.WSGIServer.handler_class = FakeWSGIHandler
+    # end setUp
 
         cls.orig_mocked_values = setup_mocks(cls.mocks + (extra_mocks or []))
 

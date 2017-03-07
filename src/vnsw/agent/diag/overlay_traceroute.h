@@ -8,9 +8,7 @@
 #include "diag/diag.h"
 #include "diag/diag_types.h"
 #include "pkt/control_interface.h"
-
 class DiagTable;
-
 class OverlayTraceRoute: public DiagEntry {
 public:
     OverlayTraceRoute(const OverlayTraceReq *req, DiagTable *diag_table);
@@ -20,7 +18,6 @@ public:
     virtual void HandleReply(DiagPktHandler *handler);
     void ReplyLocalHop();
     virtual bool IsDone() { return done_;}
-
 private:
     void IncrementTtl();
     uuid  vn_uuid_;

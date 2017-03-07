@@ -24,7 +24,6 @@ class EcmpLoadBalance;
 class PathPreference {
 public:
     enum Preference {
-        INVALID = 0,
         HA_STALE = 1,
         LOW = 100,
         HIGH = 200

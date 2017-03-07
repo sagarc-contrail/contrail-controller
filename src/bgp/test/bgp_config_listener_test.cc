@@ -738,12 +738,12 @@ TEST_F(BgpConfigListenerTest, BgpRouterChange2) {
 }
 
 //
-// Link event for the instance-bgp-router link of a bgp-router object.
+// Link event for an uninteresting link of a bgp-router object.
 //
-TEST_F(BgpConfigListenerTest, BgpRouterInstanceLinkChange) {
+TEST_F(BgpConfigListenerTest, BgpRouterUninterestingLinkChange) {
 
-    // Initialize config with local router and 3 remote routers.
-    string content = ReadFile("controller/src/bgp/testdata/config_listener_test_1.xml");
+    // Initialize config with local router and add link to master instance.
+    string content = ReadFile("controller/src/bgp/testdata/config_listener_test_0.xml");
     EXPECT_TRUE(parser_.Parse(content));
     string instance(BgpConfigManager::kMasterInstance);
     string router = instance + ":local";
@@ -759,33 +759,28 @@ TEST_F(BgpConfigListenerTest, BgpRouterInstanceLinkChange) {
         "bgp-router", router, "routing-instance", instance);
     task_util::WaitForIdle();
 
-    // Only one edge should get added to the edge list.
-    // This is the instance-bgp-router edge from bgp-router.
-    // The instance-bgp-router edge from the routing-instance is not
-    // interesting since the reaction map for routing-instance doesn't
-    // have an entry for instance-bgp-router.
+    // Edge list should be empty since both edges are not interesting.
+    // Reaction map for bgp-router has no entry for instance-bgp-router.
+    // Reaction map for routing-instance has no entry for instance-bgp-router.
     TASK_UTIL_EXPECT_EQ(0, GetChangeListCount());
     TASK_UTIL_EXPECT_EQ(0, GetNodeListCount());
-    TASK_UTIL_EXPECT_EQ(1, GetEdgeListCount());
+    TASK_UTIL_EXPECT_EQ(0, GetEdgeListCount());
 
     // Perform propagation and verify change list.
-    // The bgp-peerings are on the change list since the propagate list for
-    // instance-bgp-router in bgp-router contains bgp-peering.
+    // Nothing should get added since the node and edge lists are empty.
     PerformChangeListPropagation();
-    TASK_UTIL_EXPECT_EQ(3, GetChangeListCount());
-    TASK_UTIL_EXPECT_EQ(3, GetChangeListCount("bgp-peering"));
+    TASK_UTIL_EXPECT_EQ(0, GetChangeListCount());
 
     ResumeChangeListPropagation();
     TASK_UTIL_EXPECT_EQ(0, GetChangeListCount());
 }
 
 //
-// Node event for a routing-instance object with bgp-routers and bgp-peerings.
+// Node event for a routing-instance object without any connections.
 //
 TEST_F(BgpConfigListenerTest, RoutingInstanceChange1) {
 
-    // Initialize config with local router and 3 remote routers, hence 6
-    // peerings.
+    // Initialize config with local router and 3 remote routers.
     string content = ReadFile("controller/src/bgp/testdata/config_listener_test_1.xml");
     EXPECT_TRUE(parser_.Parse(content));
     task_util::WaitForIdle();
@@ -796,20 +791,17 @@ TEST_F(BgpConfigListenerTest, RoutingInstanceChange1) {
     string id_name(BgpConfigManager::kMasterInstance);
     ifmap_test_util::IFMapNodeNotify(&db_, "routing-instance", id_name);
 
-    // The routing-instance should be on the change list and on the node list
-    // since there's an entry for self in the reaction map.
+    // The routing-instance should be on the change list but not on the node
+    // list since there's no entry for self in the reaction map.
     TASK_UTIL_EXPECT_EQ(1, GetChangeListCount());
-    TASK_UTIL_EXPECT_EQ(1, GetNodeListCount());
+    TASK_UTIL_EXPECT_EQ(0, GetNodeListCount());
     TASK_UTIL_EXPECT_EQ(0, GetEdgeListCount());
 
     // Perform propagation and verify change list.
-    // The bgp-peerings are on the change list since the propagate list for
-    // self in routing-instance contains instance-bgp-router and propagate
-    // list for instance-bgp-router in bgp-router contains bgp-peering.
+    // Nothing else should get added since the node and edge lists are empty.
     PerformChangeListPropagation();
-    TASK_UTIL_EXPECT_EQ(7, GetChangeListCount());
+    TASK_UTIL_EXPECT_EQ(1, GetChangeListCount());
     TASK_UTIL_EXPECT_EQ(1, GetChangeListCount("routing-instance"));
-    TASK_UTIL_EXPECT_EQ(6, GetChangeListCount("bgp-peering"));
 
     ResumeChangeListPropagation();
     TASK_UTIL_EXPECT_EQ(0, GetChangeListCount());
@@ -837,15 +829,14 @@ TEST_F(BgpConfigListenerTest, RoutingInstanceChange2) {
     string id_name("red");
     ifmap_test_util::IFMapNodeNotify(&db_, "routing-instance", id_name);
 
-    // The routing-instance should be on the change list and on the node list
-    // since there's an entry for self in the reaction map.
+    // The routing-instance should be on the change list but not on the node
+    // list since there's no entry for self in the reaction map.
     TASK_UTIL_EXPECT_EQ(1, GetChangeListCount());
-    TASK_UTIL_EXPECT_EQ(1, GetNodeListCount());
+    TASK_UTIL_EXPECT_EQ(0, GetNodeListCount());
     TASK_UTIL_EXPECT_EQ(0, GetEdgeListCount());
 
     // Perform propagation and verify change list.
-    // Nothing else should get added since the routing-instance doesn't have
-    // any bgp-routers and bgp-peerings.
+    // Nothing else should get added since the node and edge lists are empty.
     PerformChangeListPropagation();
     TASK_UTIL_EXPECT_EQ(1, GetChangeListCount());
     TASK_UTIL_EXPECT_EQ(1, GetChangeListCount("routing-instance"));
@@ -1449,6 +1440,43 @@ TEST_F(BgpConfigListenerTest, RoutingInstanceVirtualNetworkChange3) {
 }
 
 //
+// Link event for an uninteresting link of a routing-instance object.
+//
+TEST_F(BgpConfigListenerTest, RoutingInstanceUninterestingLinkChange) {
+
+    // Initialize config with local router and add link to master instance.
+    string content = ReadFile("controller/src/bgp/testdata/config_listener_test_0.xml");
+    EXPECT_TRUE(parser_.Parse(content));
+    string instance(BgpConfigManager::kMasterInstance);
+    string router = instance + ":local";
+    ifmap_test_util::IFMapMsgLink(&db_, "routing-instance", instance,
+        "bgp-router", router, "instance-bgp-router");
+    task_util::WaitForIdle();
+    TASK_UTIL_EXPECT_EQ(0, GetChangeListCount());
+
+    // Pause propagation, notify instance-bgp-router link.
+    PauseChangeListPropagation();
+    ifmap_test_util::IFMapLinkNotify(&db_, &graph_,
+        "routing-instance", instance, "bgp-router", router);
+    task_util::WaitForIdle();
+
+    // Edge list should be empty since both edges are not interesting.
+    // Reaction map for bgp-router has no entry for instance-bgp-router.
+    // Reaction map for routing-instance has no entry for instance-bgp-router.
+    TASK_UTIL_EXPECT_EQ(0, GetChangeListCount());
+    TASK_UTIL_EXPECT_EQ(0, GetNodeListCount());
+    TASK_UTIL_EXPECT_EQ(0, GetEdgeListCount());
+
+    // Perform propagation and verify change list.
+    // Nothing should get added since the node and edge lists are empty.
+    PerformChangeListPropagation();
+    TASK_UTIL_EXPECT_EQ(0, GetChangeListCount());
+
+    ResumeChangeListPropagation();
+    TASK_UTIL_EXPECT_EQ(0, GetChangeListCount());
+}
+
+//
 // Node event for a virtual-network object associated with routing-instances.
 // There are no other virtual-networks or routing-instances.
 //
@@ -1664,7 +1692,7 @@ TEST_F(BgpConfigListenerTest, RoutingPolicyUpdate_1) {
     task_util::WaitForIdle();
 
     TASK_UTIL_EXPECT_EQ(1, GetChangeListCount());
-    TASK_UTIL_EXPECT_EQ(1, GetNodeListCount());
+    TASK_UTIL_EXPECT_EQ(0, GetNodeListCount());
     TASK_UTIL_EXPECT_EQ(0, GetEdgeListCount());
 
     PerformChangeListPropagation();
@@ -1909,7 +1937,7 @@ TEST_F(BgpConfigListenerTest, RoutingPolicyUpdate_8) {
     task_util::WaitForIdle();
 
     TASK_UTIL_EXPECT_EQ(1, GetChangeListCount());
-    TASK_UTIL_EXPECT_EQ(1, GetNodeListCount());
+    TASK_UTIL_EXPECT_EQ(0, GetNodeListCount());
     TASK_UTIL_EXPECT_EQ(0, GetEdgeListCount());
 
     PerformChangeListPropagation();

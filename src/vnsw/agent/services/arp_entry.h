@@ -5,6 +5,11 @@
 #ifndef vnsw_agent_arp_entry_hpp
 #define vnsw_agent_arp_entry_hpp
 
+#ifdef _WINDOWS
+#define ARPOP_REQUEST   1               /* ARP request                  */
+#endif
+
+
 struct ArpKey {
     ArpKey(in_addr_t addr, const VrfEntry *ventry) : ip(addr), vrf(ventry) {};
     ArpKey(const ArpKey &key) : ip(key.ip), vrf(key.vrf) {};
@@ -47,7 +52,7 @@ public:
     bool IsResolved();
     void Resync(bool policy, const VnListType &vnlist,
                 const SecurityGroupList &sg);
-    int retry_count() const { return retry_count_; }
+
 private:
     void StartTimer(uint32_t timeout, uint32_t mtype);
     void SendArpRequest();

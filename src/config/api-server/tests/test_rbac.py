@@ -10,6 +10,9 @@ import uuid
 import logging
 import coverage
 
+import cgitb
+cgitb.enable(format='text')
+
 import fixtures
 import testtools
 from testtools.matchers import Equals, MismatchError, Not, Contains
@@ -29,8 +32,6 @@ import keystoneclient.v2_0.client as keystone
 from keystonemiddleware import auth_token
 from cfgm_common import rest, utils
 import cfgm_common
-from cfgm_common import vnc_cgitb
-vnc_cgitb.enable(format='text')
 
 sys.path.append('../common/tests')
 import test_utils

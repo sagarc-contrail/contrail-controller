@@ -16,6 +16,7 @@ monkey.patch_all(thread=not 'unittest' in sys.modules)
 from cfgm_common.zkclient import ZookeeperClient
 import requests
 import ConfigParser
+import cgitb
 import cStringIO
 import argparse
 
@@ -27,7 +28,6 @@ import logging.handlers
 from cfgm_common.imid import *
 from cfgm_common import importutils
 from cfgm_common import svc_info
-from cfgm_common import vnc_cgitb
 from cfgm_common.utils import cgitb_hook
 
 from config_db import *
@@ -45,7 +45,6 @@ import discoveryclient.client as client
 from agent_manager import AgentManager
 from db import ServiceMonitorDB
 from logger import ServiceMonitorLogger
-from module_logger import ServiceMonitorModuleLogger
 from rabbit import RabbitConnection
 from loadbalancer_agent import LoadbalancerAgent
 from port_tuple import PortTupleAgent
@@ -157,7 +156,7 @@ class SvcMonitor(object):
 
         # load port tuple agent
         self.port_tuple_agent = PortTupleAgent(self, self._vnc_lib,
-            self._cassandra, self._args, ServiceMonitorModuleLogger(self.logger))
+            self._cassandra, self._args, self.logger)
         self._agent_manager.register_agent(self.port_tuple_agent)
 
         # Read the cassandra and populate the entry in ServiceMonitor DB
@@ -897,7 +896,7 @@ def main(args_str=None):
 
 
 def server_main():
-    vnc_cgitb.enable(format='text')
+    cgitb.enable(format='text')
     main()
 # end server_main
 

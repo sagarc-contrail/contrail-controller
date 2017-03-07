@@ -94,6 +94,11 @@ bool CollectorSummaryLogger(Collector *collector, const string & hostname,
         vector<string> ip_list;
         ip_list.push_back(Collector::GetSelfIp());
         state.set_self_ip_list(ip_list);
+        vector<string> list;
+        MiscUtils::GetCoreFileList(Collector::GetProgramName(), list);
+        if (list.size()) {
+            state.set_core_files_list(list);
+        }
         first = false;
     }
     if (!build_info_set) {
@@ -364,13 +369,8 @@ int main(int argc, char *argv[])
             options.kafka_prefix(),
             ttl_map, options.cassandra_user(),
             options.cassandra_password(),
-            options.cassandra_compaction_strategy(),
-            options.cassandra_flow_tables_compaction_strategy(),
             zookeeper_server_list,
-            use_zookeeper, options.disable_all_db_writes(),
-            options.disable_db_statistics_writes(),
-            options.disable_db_messages_writes(),
-            !options.enable_db_messages_keyword_writes());
+            use_zookeeper);
 
 #if 0
     // initialize python/c++ API

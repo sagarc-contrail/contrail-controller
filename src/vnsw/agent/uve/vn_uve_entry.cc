@@ -1,6 +1,12 @@
 /*
  * Copyright (c) 2013 Juniper Networks, Inc. All rights reserved.
  */
+#ifdef _WINDOWS
+
+#include <boost/asio.hpp>
+#include <windows.h>
+
+#endif
 
 #include <uve/vn_uve_entry.h>
 #include <uve/agent_uve_stats.h>
@@ -324,7 +330,6 @@ void VnUveEntry::BuildNhStats(const StatsManager::VrfStats *s,
     mns.set_local_vm_l3_forwards(s->encap_composites);
     mns.set_total_multicast_forwards(s->l2_mcast_composites);
     nhs.set_comp_nh_stats(mns);
-    vrf_stats.set_nh_packet_counts(nhs);
 }
 
 bool VnUveEntry::FillVrfStats(int vrf_id, UveVirtualNetworkAgent &s_vn) {

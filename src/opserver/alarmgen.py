@@ -20,8 +20,6 @@ import signal
 import logging
 logging.getLogger('kafka').addHandler(logging.StreamHandler())
 logging.getLogger('kafka').setLevel(logging.WARNING)
-logging.getLogger('kazoo').addHandler(logging.StreamHandler())
-logging.getLogger('kazoo').setLevel(logging.WARNING)
 try:
     from collections import OrderedDict
 except ImportError:
@@ -57,8 +55,7 @@ from sandesh.alarmgen_ctrl.ttypes import PartitionOwnershipReq, \
     UVETableInfoReq, UVETableInfoResp, UVEObjectInfo, UVEStructInfo, \
     UVETablePerfReq, UVETablePerfResp, UVETableInfo, UVETableCount, \
     UVEAlarmStateMachineInfo, UVEAlarmState, UVEAlarmOperState,\
-    AlarmStateChangeTrace, UVEQTrace, AlarmConfig, AlarmConfigRequest, \
-    AlarmConfigResponse
+    AlarmStateChangeTrace, UVEQTrace
 
 from sandesh.discovery.ttypes import CollectorTrace
 from cpuinfo import CpuInfoData
@@ -247,41 +244,28 @@ class AlarmProcessor(object):
                     description=alarm.description(), ack=False)
     # end process_alarms
 
-    def _get_uve_attribute(self, tuve, attr_list, uve_path=None):
-        if uve_path is None:
-            uve_path = []
+    def _get_uve_attribute(self, tuve, puve, attr_list):
         if tuve is None or not attr_list:
-            return {'value': tuve, 'uve_path': uve_path,
+            return {'value': tuve, 'parent_attr': puve,
                     'status': False if len(attr_list) else True}
         if isinstance(tuve, dict):
-            if attr_list[0] in ('*', '__value'):
-                return [self._get_uve_attribute(val, attr_list[1:],
-                        uve_path+[{key: val}]) \
-                        for key, val in tuve.iteritems()]
-            elif attr_list[0] == '__key':
-                return [self._get_uve_attribute(key, attr_list[1:],
-                        uve_path+[{key: val}]) \
-                        for key, val in tuve.iteritems()]
-            else:
-                tuve = tuve.get(attr_list[0])
-                uve_path.append({attr_list[0]: tuve})
-                return self._get_uve_attribute(tuve, attr_list[1:], uve_path)
+            return self._get_uve_attribute(tuve.get(attr_list[0]),
+                                           tuve, attr_list[1:])
         elif isinstance(tuve, list):
-            return [self._get_uve_attribute(elem, attr_list,
-                    uve_path+[{'__list_element__': elem}]) \
+            return [self._get_uve_attribute(elem, tuve, attr_list) \
                     for elem in tuve]
         elif isinstance(tuve, str):
             try:
                 json_elem = json.loads(tuve)
             except ValueError:
-                return {'value': None, 'uve_path': uve_path, 'status': False}
+                return {'value': None, 'parent_attr': tuve, 'status': False}
             else:
-                return self._get_uve_attribute(json_elem, attr_list, uve_path)
+                return self._get_uve_attribute(json_elem, tuve, attr_list)
     # end _get_uve_attribute
 
     def _get_operand_value(self, uve, operand):
         attr_list = operand.split('.')
-        return self._get_uve_attribute(uve, attr_list)
+        return self._get_uve_attribute(uve, uve, attr_list)
     # end _get_operand_value
 
     def _get_json_value(self, val):
@@ -293,51 +277,24 @@ class AlarmProcessor(object):
             return val
     # end _get_json_value
 
-    def _get_attribute_from_uve_path(self, attr, uve_path):
-        attr_list = attr.split('.')
-        ai = ui = 0
-        pnode = uve_path[ui]
-        while (ai < len(attr_list) and ui < len(uve_path)):
-            if attr_list[ai] == '__key':
-                return uve_path[ui].iterkeys().next()
-            elif attr_list[ai] == '__value':
-                return uve_path[ui].itervalues().next()
-            if attr_list[ai] != '*' and attr_list[ai] not in uve_path[ui]:
-                break
-            pnode = uve_path[ui]
-            ui += 1
-            ai += 1
-            if len(uve_path) > ui and '__list_element__' in uve_path[ui]:
-                pnode = uve_path[ui]
-                ui += 1
-        if not ui:
-            return None
-        val = pnode.itervalues().next()
-        for a in attr_list[ai:]:
-            if val is None or not isinstance(val, dict):
-                return None
-            val = val.get(a)
-        return val
-    # end _get_attribute_from_uve_path
-
     def _get_json_variables(self, uve, exp, operand1_val,
                             operand2_val, is_operand2_json_val):
         json_vars = {}
         for var in exp.variables:
-            p1 = os.path.commonprefix([exp.operand1.split('.'),
-                var.split('.')])
-            if not is_operand2_json_val:
-                p2 = os.path.commonprefix(
-                    [exp.operand2.uve_attribute.split('.'), var.split('.')])
-                if p1 > p2:
-                    var_val = self._get_attribute_from_uve_path(var,
-                        operand1_val['uve_path'])
-                else:
-                    var_val = self._get_attribute_from_uve_path(var,
-                        operand2_val['uve_path'])
+            # If var and operand1/operand2 are at the same hirerarchy in
+            # the uve struture, then get the value of var from parent_attr of
+            # the corresponding operand_val
+            # TODO: Handle the case len(var.rsplit) != len(operand.rsplit)
+            if var.rsplit('.', 1)[0] == exp.operand1.rsplit('.', 1)[0]:
+                var_val = \
+                    operand1_val['parent_attr'].get(var.rsplit('.', 1)[1])
+            elif not is_operand2_json_val and \
+                var.rsplit('.', 1)[0] == exp.operand2.uve_attribute.rsplit(
+                    '.', 1)[0]:
+                var_val = \
+                    operand2_val['parent_attr'].get(var.rsplit('.', 1)[1])
             else:
-                var_val = self._get_attribute_from_uve_path(var,
-                    operand1_val['uve_path'])
+                var_val = self._get_operand_value(uve, var)['value']
             json_vars[var] = self._get_json_value(var_val)
         return json_vars
     # end _get_json_variables
@@ -355,12 +312,8 @@ class AlarmProcessor(object):
             return val1 == val2
         elif operation == '!=':
             return val1 != val2
-        elif operation == '<':
-            return val1 < val2
         elif operation == '<=':
             return val1 <= val2
-        elif operation == '>':
-            return val1 > val2
         elif operation == '>=':
             return val1 >= val2
         elif operation == 'in':
@@ -371,8 +324,6 @@ class AlarmProcessor(object):
             if not isinstance(val2, list):
                 return True
             return val1 not in val2
-        elif operation == 'range':
-            return val2[0] <= val1 <= val2[1]
         elif operation == 'size==':
             if not isinstance(val1, list):
                 return False
@@ -565,36 +516,13 @@ class AlarmStateMachine:
         self.uai = uai
 
     def is_new_alarm_same(self, new_uai):
-        old_or_list = self.uai.alarm_rules.or_list
-        new_or_list = new_uai.alarm_rules.or_list
-        if (not old_or_list and new_or_list) or \
-            (old_or_list and not new_or_list):
-            return False
-        if old_or_list and new_or_list:
-            if len(old_or_list) != len(new_or_list):
-                return False
-            for i in range(len(old_or_list)):
-                old_or_term = old_or_list[i]
-                new_or_term = new_or_list[i]
-                if len(old_or_term.and_list) != len(new_or_term.and_list):
-                    return False
-                for j in range(len(old_or_term.and_list)):
-                    old_and_term = old_or_term.and_list[j]
-                    new_and_term = new_or_term.and_list[j]
-                    if old_and_term.condition != new_and_term.condition:
-                        return False
-                    if len(old_and_term.match) != len(new_and_term.match):
-                        return False
-                    if old_and_term.condition.operation in \
-                       ['<', '<=', '>', '>=', 'range']:
-                        for k in range(len(old_and_term.match)):
-                            if old_and_term.match[k].json_variables != \
-                               new_and_term.match[k].json_variables:
-                                return False
-                    else:
-                        if old_and_term.match != new_and_term.match:
-                            return False
-        if self.uas.state == UVEAlarmState.Active:
+        uai2 = copy.deepcopy(self.uai)
+        uai2.timestamp = 0
+        uai2.token = ""
+        uai2.ack = False
+
+        if (uai2 == new_uai) and \
+                self.uas.state == UVEAlarmState.Active:
             return True
         return False
 
@@ -843,7 +771,7 @@ class AlarmStateMachine:
                     [timeout_val]:
                 self._logger.error("Timer error for (%s,%s,%s)" % \
                     (tab, uv, nm))
-                raise SystemExit(1)
+                raise SystemExit
             AlarmStateMachine.tab_alarms_timer[timeout_val].add\
                         ((asm.tab, asm.uv, asm.nm))
 
@@ -917,7 +845,7 @@ class Controller(object):
         self.trace_buf = [
             {'name':'DiscoveryMsg', 'size':1000},
             {'name':'AlarmStateChangeTrace', 'size':1000},
-            {'name':'UVEQTrace', 'size':20000}
+            {'name':'UVEQTrace', 'size':10000}
         ]
         # Create trace buffers 
         for buf in self.trace_buf:
@@ -982,8 +910,8 @@ class Controller(object):
 
         # Create config handler to read/update alarm config
         rabbitmq_params = self._conf.rabbitmq_params()
-        self._config_handler = AlarmGenConfigHandler(self._sandesh,
-            self._moduleid, self._instance_id, self.config_log, self.disc,
+        self._config_handler = AlarmGenConfigHandler(self._moduleid,
+            self._instance_id, self.config_log, self.disc,
             self._conf.keystone_params(), rabbitmq_params, self.mgrs,
             self.alarm_config_change_callback)
         if rabbitmq_params['servers'] and self.disc:
@@ -997,7 +925,6 @@ class Controller(object):
         UVETableAlarmReq.handle_request = self.handle_UVETableAlarmReq 
         UVETableInfoReq.handle_request = self.handle_UVETableInfoReq
         UVETablePerfReq.handle_request = self.handle_UVETablePerfReq
-        AlarmConfigRequest.handle_request = self.handle_AlarmConfigRequest
 
     def config_log(self, msg, level):
         self._sandesh.logger().log(
@@ -1020,30 +947,19 @@ class Controller(object):
         newset = set(part_list)
         oldset = self._partset
         self._partset = newset
-
-        try:
-            self._logger.error('Partition List : new %s old %s' % \
-                (str(newset),str(oldset)))
-
-            self._logger.error('Partition Add : %s' % str(newset-oldset))
-            self.partition_change(newset-oldset, True)
-
-            self._logger.error('Partition Del : %s' % str(oldset-newset))
-            if not self.partition_change(oldset-newset, False):
-                self._logger.error('Partition Del : %s failed!' % str(oldset-newset))
-                raise SystemExit(1)
-
-	    self._logger.error('Partition Del done: %s' % str(oldset-newset))
-
-        except Exception as ex:
-            template = "Exception {0} in Partition List. Arguments:\n{1!r}"
-            messag = template.format(type(ex).__name__, ex.args)
-            self._logger.error("%s : traceback %s" % \
-                                    (messag, traceback.format_exc()))
-            self._logger.error('Partition List failed %s %s' % \
-                (str(newset),str(oldset)))
-        except SystemExit:
-            raise SystemExit(1)
+        
+        self._logger.error('Partition List : new %s old %s' % \
+            (str(newset),str(oldset)))
+        
+        for addpart in (newset-oldset):
+            self._logger.error('Partition Add : %s' % addpart)
+            self.partition_change(addpart, True)
+        
+        for delpart in (oldset-newset):
+            self._logger.error('Partition Del : %s' % delpart)
+            if not self.partition_change(delpart, False):
+                self._logger.error('Partition Del : %s failed!' % delpart)
+                raise SystemExit
 
         self._logger.error('Partition List done : new %s old %s' % \
             (str(newset),str(oldset)))
@@ -1194,7 +1110,7 @@ class Controller(object):
         """
         if not redish:
             self._logger.error("No redis handle")
-            raise SystemExit(1)
+            raise SystemExit
         old_acq_time = redish.hget("AGPARTS:%s" % inst, part)
         if old_acq_time is None:
             self._logger.error("Agg %s part %d new" % (inst, part))
@@ -1259,7 +1175,7 @@ class Controller(object):
 
         if retry:
             self._logger.error("Agg unexpected rows %s" % str(rows))
-            raise SystemExit(1)
+            raise SystemExit
         
     def send_alarm_update(self, tab, uk):
         ustruct = None
@@ -1288,41 +1204,6 @@ class Controller(object):
             self.send_alarm_update(alarm[0], alarm[1])
         for alarm in update_alarms:
             self.send_alarm_update(alarm[0], alarm[1])
-
-    def run_uve_agg(self, lredis, outp, part, acq_time):
-        # Write the aggregate UVE for all UVE updates for the
-        # given partition
-        rows = []
-        for ku,vu in outp.iteritems():
-            if vu is None:
-                # This message has no type!
-                # Its used to indicate a delete of the entire UVE
-                rows.append(OutputRow(key=ku, typ=None, val=None))
-                if len(rows) >= self._max_out_rows:
-                    self.send_agg_uve(lredis,
-                        self._instance_id,
-                        part,
-                        acq_time,
-                        rows)
-                    rows[:] = []
-                continue
-            for kt,vt in vu.iteritems():
-                rows.append(OutputRow(key=ku, typ=kt, val=vt))
-                if len(rows) >= self._max_out_rows:
-                    self.send_agg_uve(lredis,
-                        self._instance_id,
-                        part,
-                        acq_time,
-                        rows)
-                    rows[:] = []
-        # Flush all remaining rows
-        if len(rows):
-            self.send_agg_uve(lredis,
-                self._instance_id,
-                part,
-                acq_time,
-                rows)
-            rows[:] = []
 
     def run_uve_processing(self):
         """
@@ -1405,7 +1286,7 @@ class Controller(object):
                     self._logger.info("UVE Process for %d : %d, %d remain" % \
                             (part, len(pendingset[part]), len(self._uveq[part])))
                         
-                    gevs[part] = gevent.spawn(self.handle_uve_notif, part,\
+                    gevs[part] = gevent.spawn(self.handle_uve_notif,part,\
                         pendingset[part])
 		if kafka_topic_down:
                     ConnectionState.update(conn_type = ConnectionType.KAFKA_PUB,
@@ -1416,39 +1297,56 @@ class Controller(object):
 
                 if len(gevs):
                     gevent.joinall(gevs.values())
-                    self._logger.info("UVE Processing joined")
-                    outp={}
-                    gevs_out={}
                     for part in gevs.keys():
                         # If UVE processing failed, requeue the working set
                         try:
-                            outp[part] = gevs[part].get()
+                            outp = gevs[part].get()
                         except Exception as ex:
                             template = "Exception {0} in notif worker. Arguments:\n{1!r}"
                             messag = template.format(type(ex).__name__, ex.args)
                             self._logger.error("%s : traceback %s" % \
                                     (messag, traceback.format_exc()))
-                            outp[part] = None
-                        if outp[part] is None:
+                            outp = None
+                        if outp is None:
                             self._logger.error("UVE Process failed for %d" % part)
                             self.handle_uve_notifq(part, pendingset[part])
                         elif not part in self._workers:
-                            outp[part] = None
                             self._logger.error(
                                     "Part %d is gone, cannot process UVEs" % part)
                         else:
-                            self._logger.info("UVE Agg on %d items in part %d" % \
-                                    (len(outp), part))
-                            gevs_out[part] = gevent.spawn(self.run_uve_agg, lredis,\
-                                    outp[part], part, self._workers[part].acq_time())
-
-                    if len(gevs_out):
-                        gevent.joinall(gevs_out.values()) 
-
-                        # Check for exceptions during processing
-                        for part in gevs_out.keys():
-                            gevs_out[part].get()                        
-
+                            acq_time = self._workers[part].acq_time()
+                            if len(outp):
+                                rows = []
+                                for ku,vu in outp.iteritems():
+                                    if vu is None:
+                                        # This message has no type!
+                                        # Its used to indicate a delete of the entire UVE
+                                        rows.append(OutputRow(key=ku, typ=None, val=None))
+                                        if len(rows) >= self._max_out_rows:
+                                            self.send_agg_uve(lredis,
+                                                self._instance_id,
+                                                part,
+                                                acq_time,
+                                                rows)
+                                            rows[:] = []
+                                        continue
+                                    for kt,vt in vu.iteritems():
+                                        rows.append(OutputRow(key=ku, typ=kt, val=vt))
+                                        if len(rows) >= self._max_out_rows:
+                                            self.send_agg_uve(lredis,
+                                                self._instance_id,
+                                                part,
+                                                acq_time,
+                                                rows)
+                                            rows[:] = []
+                                # Flush all remaining rows
+                                if len(rows):
+                                    self.send_agg_uve(lredis,
+                                        self._instance_id,
+                                        part,
+                                        acq_time,
+                                        rows)
+                                    rows[:] = []
                 # If there are alarm config changes, then start a gevent per
                 # partition to process the alarm config changes
                 if self._alarm_config_change_map:
@@ -1462,7 +1360,6 @@ class Controller(object):
                             alarm_config_change_map)
                     if alarm_workers:
                         gevent.joinall(alarm_workers.values())
-
             except Exception as ex:
                 template = "Exception {0} in uve proc. Arguments:\n{1!r}"
                 messag = template.format(type(ex).__name__, ex.args)
@@ -1481,10 +1378,9 @@ class Controller(object):
                 messag = template.format(type(ex).__name__, ex.args)
                 self._logger.error("%s : traceback %s" % \
                                   (messag, traceback.format_exc()))
-                raise SystemExit(1)
-            if (curr - prev) < 1:
-                gevent.sleep(1 - (curr - prev))
-                self._logger.info("UVE Done")
+                raise SystemExit
+            if (curr - prev) < 0.5:
+                gevent.sleep(0.5 - (curr - prev))
             else:
                 self._logger.info("UVE Process saturated")
                 gevent.sleep(0)
@@ -1598,7 +1494,6 @@ class Controller(object):
         if not part in self.ptab_info:
             return
         for tk in self.ptab_info[part].keys():
-            tcount = len(self.ptab_info[part][tk])
             for rkey in self.ptab_info[part][tk].keys():
                 uk = tk + ":" + rkey
                 if tk in self.tab_alarms:
@@ -1612,8 +1507,7 @@ class Controller(object):
                                 (alarm_msg.log()))
                         alarm_msg.send(sandesh=self._sandesh)
                 del self.ptab_info[part][tk][rkey]
-            self._logger.error("UVE stop removed %d UVEs of type %s" % \
-                    (tcount, tk))
+                self._logger.error("UVE %s deleted in stop" % (uk))
             del self.ptab_info[part][tk]
         del self.ptab_info[part]
 
@@ -1800,7 +1694,6 @@ class Controller(object):
 	    uveq_trace.oper = "proc-output"
 	    uveq_trace.trace_msg(name="UVEQTrace",\
 		    sandesh=self._sandesh)
-            self._logger.info("Ending UVE proc for part %d" % part)
             return output
         else:
 	    uveq_trace = UVEQTrace()
@@ -1809,7 +1702,6 @@ class Controller(object):
 	    uveq_trace.oper = "proc-error"
 	    uveq_trace.trace_msg(name="UVEQTrace",\
 		    sandesh=self._sandesh)
-            self._logger.info("Ending UVE proc for part %d with error" % part)
             return None
  
     def handle_UVETableInfoReq(self, req):
@@ -1893,110 +1785,93 @@ class Controller(object):
                 mr = True
             resp.response(req.context(), mr)
             np = np + 1
-
-    def handle_AlarmConfigRequest(self, req):
-        config_db = self._config_handler.config_db()
-        alarm_config_db = config_db.get('alarm', {})
-        alarms = []
-        if req.name is not None:
-            alarm_config = alarm_config_db.get(req.name)
-            alarm_config_db = {req.name: alarm_config} if alarm_config else {}
-        for name, config in alarm_config_db.iteritems():
-            config_dict = {k: json.dumps(v) for k, v in \
-                self._config_handler.obj_to_dict(config).iteritems()}
-            alarms.append(AlarmConfig(config_dict))
-        res = AlarmConfigResponse(alarms)
-        res.response(req.context())
-    # end handle_AlarmConfigRequest
-
-    def partition_change(self, parts, enl):
+    
+    def partition_change(self, partno, enl):
         """
         Call this function when getting or giving up
         ownership of a partition
         Args:
-            parts : Set of Partition Numbers, or a single partition
-            enl   : True for acquiring, False for giving up
+            partno : Partition Number
+            enl    : True for acquiring, False for giving up
         Returns: 
             status of operation (True for success)
         """
-        if not isinstance(parts,set):
-            parts = set([parts])
         status = False
         if enl:
-            if len(parts - set(self._workers.keys())) != len(parts):
-                self._logger.info("Dup partitions %s" % \
-                    str(parts.intersection(set(self._workers.keys()))))
+            if partno in self._workers:
+                self._logger.info("Dup partition %d" % partno)
             else:
-                for partno in parts:
-                    ph = UveStreamProc(','.join(self._conf.kafka_broker_list()),
-                            partno, self._conf.kafka_prefix()+"-uve-" + str(partno),
-                            self._logger,
-                            self.handle_uve_notifq, self._conf.host_ip(),
-                            self.handle_resource_check,
-                            self._instance_id,
-                            self._conf.redis_server_port(),
-                            self._conf.kafka_prefix()+"-workers")
-                    ph.start()
-                    self._workers[partno] = ph
-                    self._uvestats[partno] = {}
-
+                cdisc = None
+                if self.disc:
+                    cdisc = client.DiscoveryClient(
+                        self._conf.discovery()['server'],
+                        self._conf.discovery()['port'],
+                        ModuleNames[Module.ALARM_GENERATOR],
+                        '%s-%s-%d' % (self._hostname,
+                            self._instance_id, partno))
+                ph = UveStreamProc(','.join(self._conf.kafka_broker_list()),
+                        partno, self._conf.kafka_prefix()+"-uve-" + str(partno),
+                        self._logger,
+                        self.handle_uve_notifq, self._conf.host_ip(),
+                        self.handle_resource_check,
+                        self._instance_id,
+                        self._conf.redis_server_port(),
+                        self._conf.kafka_prefix()+"-workers")
+                ph.start()
+                self._workers[partno] = ph
+                self._uvestats[partno] = {}
                 tout = 1200
                 idx = 0
                 while idx < tout:
                     # When this partitions starts,
                     # uveq will get created
-                    if len(parts - set(self._uveq.keys())) != 0:
+                    if partno not in self._uveq:
                         gevent.sleep(.1)
                     else:
                         break
                     idx += 1
-                if len(parts - set(self._uveq.keys())) == 0:
+                if partno in self._uveq:
                     status = True 
                 else:
                     # TODO: The partition has not started yet,
                     #       but it still might start later.
                     #       We possibly need to exit
                     status = False
-                    self._logger.error("Unable to start partitions %s" % \
-                            str(parts - set(self._uveq.keys())))
+                    self._logger.error("Unable to start partition %d" % partno)
         else:
-            if len(parts - set(self._workers.keys())) == 0:
-                for partno in parts:
-                    ph = self._workers[partno]
-                    self._logger.error("Kill part %s" % str(partno))
-                    ph.kill(timeout=60)
-                    try:
-                        res,db = ph.get(False)
-                    except gevent.Timeout:
-                        self._logger.error("Unable to kill partition %d" % partno)
-                        return False
-
-                    self._logger.error("Returned " + str(res))
-                    self._uveqf[partno] = self._workers[partno].acq_time()
-                    del self._workers[partno]
-                    del self._uvestats[partno]
+            if partno in self._workers:
+                ph = self._workers[partno]
+                self._logger.error("Kill part %s" % str(partno))
+                ph.kill(timeout=60)
+                try:
+                    res,db = ph.get(False)
+                except gevent.Timeout:
+                    self._logger.error("Unable to kill partition %d" % partno)
+                    return False
+                    
+                self._logger.error("Returned " + str(res))
+                self._uveqf[partno] = self._workers[partno].acq_time()
+                del self._workers[partno]
+                del self._uvestats[partno]
 
                 tout = 1200
                 idx = 0
-                self._logger.error("Wait for parts %s to exit" % str(parts))
                 while idx < tout:
                     # When this partitions stop.s
                     # uveq will get destroyed
-                    if len(parts - set(self._uveq.keys())) != len(parts):
+                    if partno in self._uveq:
                         gevent.sleep(.1)
                     else:
                         break
                     idx += 1
-                if len(parts - set(self._uveq.keys())) == len(parts):
+                if partno not in self._uveq:
                     status = True 
-                    self._logger.error("Wait done for parts %s to exit" % str(parts))
                 else:
                     # TODO: The partition has not stopped yet
                     #       but it still might stop later.
                     #       We possibly need to exit
                     status = False
-                    self._logger.error("Unable to stop partitions %s" % \
-                            str(parts.intersection(set(self._uveq.keys()))))
+                    self._logger.error("Unable to stop partition %d" % partno)
             else:
                 self._logger.info("No partition %d" % partno)
 

@@ -20,7 +20,6 @@
 #include "schema/vnc_cfg_types.h"
 
 using std::auto_ptr;
-using std::find;
 using std::make_pair;
 using std::pair;
 using std::set;
@@ -162,22 +161,11 @@ static bool AddressFamilyIsValid(BgpNeighborConfig *neighbor,
 // that represent each family with a simple string.
 //
 static void BuildFamilyAttributesList(BgpNeighborConfig *neighbor,
-    const BgpNeighborConfig::AddressFamilyList &family_list,
-    const vector<string> &remote_family_list) {
+    const BgpNeighborConfig::AddressFamilyList &family_list) {
     BgpNeighborConfig::FamilyAttributesList family_attributes_list;
     BOOST_FOREACH(const string &family, family_list) {
-        // Skip families that are not valid/supported for the neighbor.
         if (!AddressFamilyIsValid(neighbor, family))
             continue;
-
-        // Skip families that are not configured on remote bgp-router.
-        if (!remote_family_list.empty()) {
-            vector<string>::const_iterator it = find(
-                remote_family_list.begin(), remote_family_list.end(), family);
-            if (it == remote_family_list.end())
-                continue;
-        }
-
         BgpFamilyAttributesConfig family_attributes(family);
         family_attributes_list.push_back(family_attributes);
     }
@@ -354,20 +342,19 @@ static BgpNeighborConfig *MakeBgpNeighborConfig(
     const BgpIfmapProtocolConfig *master_protocol =
         master_instance->protocol_config();
     if (master_protocol && master_protocol->bgp_router()) {
-        const autogen::BgpRouterParams &master_params =
+        const autogen::BgpRouterParams &params =
             master_protocol->router_params();
-        if (master_params.admin_down) {
+        if (params.admin_down) {
             neighbor->set_admin_down(true);
         }
-        Ip4Address localid =
-            Ip4Address::from_string(master_params.identifier, err);
+        Ip4Address localid = Ip4Address::from_string(params.identifier, err);
         if (err == 0) {
             neighbor->set_local_identifier(IpAddressToBgpIdentifier(localid));
         }
-        if (master_params.local_autonomous_system) {
-            neighbor->set_local_as(master_params.local_autonomous_system);
+        if (params.local_autonomous_system) {
+            neighbor->set_local_as(params.local_autonomous_system);
         } else {
-            neighbor->set_local_as(master_params.autonomous_system);
+            neighbor->set_local_as(params.autonomous_system);
         }
         if (instance != master_instance) {
             neighbor->set_passive(true);
@@ -378,23 +365,18 @@ static BgpNeighborConfig *MakeBgpNeighborConfig(
     // Note that there's no instance protocol config for non-master instances.
     const BgpIfmapProtocolConfig *protocol = instance->protocol_config();
     if (protocol && protocol->bgp_router()) {
-        const autogen::BgpRouterParams &protocol_params =
-            protocol->router_params();
+        const autogen::BgpRouterParams &params = protocol->router_params();
         if (neighbor->family_attributes_list().empty()) {
-            BuildFamilyAttributesList(neighbor,
-                protocol_params.address_families.family,
-                params.address_families.family);
+            BuildFamilyAttributesList(neighbor, params.address_families.family);
         }
         if (neighbor->auth_data().Empty()) {
-            const autogen::BgpRouterParams &local_params =
-                local_router->parameters();
-            BuildKeyChain(neighbor, local_params.auth_data);
+            const autogen::BgpRouterParams &lp = local_router->parameters();
+            BuildKeyChain(neighbor, lp.auth_data);
         }
     }
 
     if (neighbor->family_attributes_list().empty()) {
-        BuildFamilyAttributesList(neighbor, default_addr_family_list,
-            params.address_families.family);
+        BuildFamilyAttributesList(neighbor, default_addr_family_list);
     }
 
     return neighbor;
@@ -1155,7 +1137,6 @@ void BgpIfmapInstanceConfig::AddNeighbor(BgpConfigManager *manager,
         neighbor->GetAddressFamilies(), neighbor->AuthKeyTypeToString(),
         neighbor->AuthKeysToString());
     neighbors_.insert(make_pair(neighbor->name(), neighbor));
-    data_.add_neighbor(neighbor->name());
     manager->Notify(neighbor, BgpConfigManager::CFG_ADD);
 }
 
@@ -1194,7 +1175,6 @@ void BgpIfmapInstanceConfig::DeleteNeighbor(BgpConfigManager *manager,
         SandeshLevel::SYS_DEBUG, BGP_LOG_FLAG_ALL);
     manager->Notify(neighbor, BgpConfigManager::CFG_DELETE);
     neighbors_.erase(neighbor->name());
-    data_.delete_neighbor(neighbor->name());
 }
 
 //

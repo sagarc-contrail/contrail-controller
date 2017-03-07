@@ -4,17 +4,22 @@
 
 #ifndef vnsw_agent_hpp
 #define vnsw_agent_hpp
-
 #include <vector>
 #include <stdint.h>
 #include <string>
+#ifndef _WINDOWS
 #include <net/ethernet.h>
+#else
+#include "net/address.h"
+#undef interface //conflict with windows specific "interface"  in objbase.h
+#endif
 #include <boost/intrusive_ptr.hpp>
 #include <base/intrusive_ptr_back_ref.h>
 #include <cmn/agent_cmn.h>
 #include <base/connection_info.h>
 #include "net/mac_address.h"
 #include "oper/agent_types.h"
+
 
 class Agent;
 class AgentParam;
@@ -247,7 +252,6 @@ extern void RouterIdDepInit(Agent *agent);
 #define kTaskFlowMgmt "Agent::FlowMgmt"
 #define kTaskFlowAudit "KSync::FlowAudit"
 #define kTaskFlowStatsCollector "Flow::StatsCollector"
-#define kTaskFlowStatsUpdate "Agent::FlowStatsUpdate"
 
 #define kTaskHealthCheck "Agent::HealthCheck"
 
@@ -653,11 +657,6 @@ public:
     }
     void set_dns_xmpp_channel(AgentDnsXmppChannel *chnl, uint8_t idx) {
         dns_xmpp_channel_[idx] = chnl;
-    }
-    bool is_dns_xmpp_channel(AgentDnsXmppChannel *channel) {
-        if (channel == dns_xmpp_channel_[0] || channel == dns_xmpp_channel_[1])
-            return true;;
-        return false;
     }
 
     // DNS Server and port

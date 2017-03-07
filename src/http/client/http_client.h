@@ -158,8 +158,7 @@ class HttpClient : public TcpServer {
 public:
     static const uint32_t kDefaultTimeout = 1;  // one millisec
 
-    explicit HttpClient(EventManager *evm, std::string task_name=std::string(
-                "http client"));
+    explicit HttpClient(EventManager *evm);
     virtual ~HttpClient();
 
     void Init();
@@ -180,6 +179,7 @@ public:
     void CancelTimer();
 
     bool IsErrorHard(const boost::system::error_code &ec);
+    bool IsShutdown() const { return shutdown_; }
 
 protected:
     virtual TcpSession *AllocSession(Socket *socket);
@@ -201,6 +201,7 @@ private:
     size_t id_;
 
     WorkQueue<EnqueuedCb> work_queue_;
+    bool shutdown_;
 
     DISALLOW_COPY_AND_ASSIGN(HttpClient);
 };

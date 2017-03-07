@@ -5,11 +5,17 @@
 #ifndef vnsw_agent_cmn_hpp
 #define vnsw_agent_cmn_hpp
 
+#ifndef _WINDOWS
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <net/address.h>
 #include <unistd.h>
+#else
+#include "winsock2.h"
+#endif
+
+
 
 #include <boost/intrusive_ptr.hpp>
 #include <boost/bind.hpp>
@@ -45,6 +51,11 @@
 #include <cmn/agent.h>
 #include <cmn/agent_db.h>
 
+#ifdef _WINDOWS
+#include "winutils.h"
+#endif
+
+
 static inline bool UnregisterDBTable(DBTable *table, 
                                      DBTableBase::ListenerId id) {
     table->Unregister(id);
@@ -74,10 +85,15 @@ static inline void CfgUuidSet(uint64_t ms_long, uint64_t ls_long,
 }
 
 static inline void CloseTaskFds(void) {
+#ifdef _WINDOWS
+	WindowsCloseTaskFiles();
+#else
     int max_open_fds = sysconf(_SC_OPEN_MAX);
     int fd;
     for(fd = 3; fd < max_open_fds; fd++)
         close(fd);
+#endif
+
 }
 
 extern SandeshTraceBufferPtr OperConfigTraceBuf;
@@ -94,6 +110,20 @@ do {\
     obj::Send(g_vns_constants.CategoryNames.find(Category::IFMAP_AGENT)->second,\
               SandeshLevel::SYS_ERR, __FILE__, __LINE__, ##__VA_ARGS__);\
 } while (false);\
+
+#define AGENT_ERROR(obj, ...)\
+do {\
+    if (LoggingDisabled()) break;\
+    obj::Send(g_vns_constants.CategoryNames.find(Category::VROUTER)->second,\
+              SandeshLevel::SYS_ERR, __FILE__, __LINE__, ##__VA_ARGS__);\
+} while (false);
+
+#define AGENT_LOG(obj, ...)\
+do {\
+    if (LoggingDisabled()) break;\
+    obj::Send(g_vns_constants.CategoryNames.find(Category::VROUTER)->second,\
+              SandeshLevel::SYS_INFO, __FILE__, __LINE__, ##__VA_ARGS__);\
+} while (false);
 
 #endif // vnsw_agent_cmn_hpp
 

@@ -27,7 +27,7 @@ from pysandesh.sandesh_session import SandeshWriter
 from pysandesh.gen_py.sandesh_trace.ttypes import SandeshTraceRequest
 from sandesh_common.vns.ttypes import Module, NodeType
 from sandesh_common.vns.constants import ModuleNames, NodeTypeNames,\
-    Module2NodeType, INSTANCE_ID_DEFAULT, UVENodeTypeNames
+    Module2NodeType, INSTANCE_ID_DEFAULT
 from subprocess import Popen, PIPE
 from StringIO import StringIO
 
@@ -41,14 +41,10 @@ class ControlEventManager(EventManager):
     def __init__(self, rule_file, discovery_server,
                  discovery_port, collector_addr):
         self.node_type = "contrail-control"
-        self.uve_node_type = UVENodeTypeNames[NodeType.CONTROL]
         self.table = "ObjectBgpRouter"
         self.module = Module.CONTROL_NODE_MGR
         self.module_id = ModuleNames[self.module]
-        if os.path.exists('/tmp/supervisord_control.sock'):
-            self.supervisor_serverurl = "unix:///tmp/supervisord_control.sock"
-        else:
-            self.supervisor_serverurl = "unix:///var/run/supervisord_control.sock"
+        self.supervisor_serverurl = "unix:///var/run/supervisord_control.sock"
         self.add_current_process()
         node_type = Module2NodeType[self.module]
         node_type_name = NodeTypeNames[node_type]

@@ -139,30 +139,7 @@ class GlobalSystemConfigServer(Resource, GlobalSystemConfig):
     # end _check_asn
 
     @classmethod
-    def _check_udc(cls, obj_dict, udcs):
-        udcl = []
-        for udc in udcs:
-            if all (k in udc.get('value', {}) for k in ('name', 'pattern')):
-                udcl.append(udc['value'])
-        udck = obj_dict.get('user_defined_log_statistics')
-        if udck:
-            udcl += udck['statlist']
-
-        for udc in udcl:
-            try:
-                re.compile(udc['pattern'])
-            except Exception as e:
-                return False, (400, 'Regex error in '
-                        'user-defined-log-statistics at %s: %s (Error: %s)' % (
-                        udc['name'], udc['pattern'], str(e)))
-        return True, ''
-    # end _check_udc
-
-    @classmethod
     def pre_dbe_create(cls, tenant_name, obj_dict, db_conn):
-        ok, result = cls._check_udc(obj_dict, [])
-        if not ok:
-            return ok, result
         ok, result = cls._check_asn(obj_dict, db_conn)
         if not ok:
             return ok, result
@@ -171,12 +148,6 @@ class GlobalSystemConfigServer(Resource, GlobalSystemConfig):
 
     @classmethod
     def pre_dbe_update(cls, id, fq_name, obj_dict, db_conn, **kwargs):
-        ok, result = cls._check_udc(obj_dict, filter(lambda x: x.get('field',
-                    '') == 'user_defined_log_statistics' and x.get(
-                        'operation', '') == 'set', kwargs.get(
-                            'prop_collection_updates', [])))
-        if not ok:
-            return ok, result
         ok, result = cls._check_asn(obj_dict, db_conn)
         if not ok:
             return ok, result
@@ -452,13 +423,10 @@ class InstanceIpServer(Resource, InstanceIp):
         if req_ip is None and subnet_uuid:
             # pickup the version from subnet
             req_ip_version = IPNetwork(sub).version
-        elif req_ip_family == "v4":
-            req_ip_version = 4
-        elif req_ip_family == "v6":
-            req_ip_version = 6
         else:
-            req_ip_version = None
+            req_ip_version = 4 # default ip v4
 
+        if req_ip_family == "v6": req_ip_version = 6
 
         # if request has ip and not g/w ip, report if already in use.
         # for g/w ip, creation allowed but only can ref to router port.
@@ -889,14 +857,6 @@ class VirtualMachineInterfaceServer(Resource, VirtualMachineInterface):
         if old_vnic_type == cls.portbindings['VNIC_TYPE_DIRECT']:
             cls._check_vrouter_link(read_result, kvp_dict, obj_dict, db_conn)
 
-        if 'virtual_machine_interface_properties' in obj_dict:
-            new_vlan = int(obj_dict['virtual_machine_interface_properties']
-                           .get('sub_interface_vlan_tag') or 0)
-            old_vlan = int((read_result.get('virtual_machine_interface_properties') or {})
-                            .get('sub_interface_vlan_tag') or 0)
-            if new_vlan != old_vlan:
-                return (False, (400, "Cannot change Vlan tag"))
-
         return True, ""
     # end pre_dbe_update
 
@@ -1142,9 +1102,7 @@ class VirtualNetworkServer(Resource, VirtualNetwork):
             # NOP for addr-mgmt module
             return True,  ""
 
-        fields = ['network_ipam_refs', 'virtual_network_network_id',
-                  'route_target_list', 'import_route_target_list',
-                  'export_route_target_list', 'multi_policy_service_chains_enabled']
+        fields = ['network_ipam_refs', 'virtual_network_network_id']
         ok, read_result = cls.dbe_read(db_conn, 'virtual_network', id,
                                        obj_fields=fields)
         if not ok:
@@ -1359,19 +1317,6 @@ class NetworkIpamServer(Resource, NetworkIpam):
 
 # end class NetworkIpamServer
 
-class DomainServer(Resource, Domain):
-
-    @classmethod
-    def pre_dbe_create(cls, tenant_name, obj_dict, db_conn):
-        # enable domain level sharing for domain template
-        share_item = {
-            'tenant': 'domain:%s' % obj_dict.get('uuid'),
-            'tenant_access': cfgm_common.DOMAIN_SHARING_PERMS
-        }
-        obj_dict['perms2']['share'].append(share_item)
-        return (True, "")
-    # end pre_dbe_create
-
 class ServiceTemplateServer(Resource, ServiceTemplate):
     generate_default_instance = False
 
@@ -1383,7 +1328,7 @@ class ServiceTemplateServer(Resource, ServiceTemplate):
             domain_uuid = db_conn.fq_name_to_uuid('domain', obj_dict['fq_name'][0:1])
         share_item = {
             'tenant': 'domain:%s' % domain_uuid,
-            'tenant_access': PERMS_RX
+            'tenant_access': PERMS_R
         }
         obj_dict['perms2']['share'].append(share_item)
         return (True, "")
@@ -1400,7 +1345,7 @@ class VirtualDnsServer(Resource, VirtualDns):
             domain_uuid = db_conn.fq_name_to_uuid('domain', obj_dict['fq_name'][0:1])
         share_item = {
             'tenant': 'domain:%s' % domain_uuid,
-            'tenant_access': PERMS_RX
+            'tenant_access': PERMS_R
         }
         obj_dict['perms2']['share'].append(share_item)
         return cls.validate_dns_server(obj_dict, db_conn)
@@ -2152,20 +2097,6 @@ class AlarmServer(Resource, Alarm):
                             except ValueError:
                                 return (False, (400, 'Invalid json_value %s '
                                     'specified in alarm_rules' % (json_val)))
-                        if and_cond['operation'] == 'range':
-                            if json_val is None:
-                                return (False, (400, 'json_value not specified'
-                                    ' for "range" operation'))
-                            val = json.loads(json_val)
-                            if not (isinstance(val, list) and
-                                    len(val) == 2 and
-                                    isinstance(val[0], (int, long, float)) and
-                                    isinstance(val[1], (int, long, float)) and
-                                    val[0] < val[1]):
-                                return (False, (400, 'Invalid json_value %s '
-                                    'for "range" operation. json_value should '
-                                    'be specified as "[x, y]", where x < y' %
-                                    (json_val)))
                     else:
                         return (False, (400, 'operand2 should have '
                             '"uve_attribute" or "json_value"'))

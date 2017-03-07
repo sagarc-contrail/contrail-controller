@@ -155,9 +155,9 @@ class VncIfmapClient(object):
                                          self._health_checker)
     # end __init__
 
-    @classmethod
-    def object_alloc(cls, obj_class, parent_res_type, fq_name):
-        res_type = obj_class.resource_type
+    def object_alloc(self, obj_type, parent_res_type, fq_name):
+        res_type =\
+            self._db_client_mgr.get_resource_class(obj_type).resource_type
         my_fqn = ':'.join(fq_name)
         parent_fqn = ':'.join(fq_name[:-1])
 
@@ -633,24 +633,13 @@ class VncIfmapClient(object):
                                       True)
         self._publish_to_ifmap_enqueue('delete', del_str)
 
-        try:
-
-            # del meta from cache and del id if this was last meta
-            if meta_name:
-                del self._id_to_metas[self_imid][meta_name]
-                if not self._id_to_metas[self_imid]:
-                    del self._id_to_metas[self_imid]
-            else:
+        # del meta from cache and del id if this was last meta
+        if meta_name:
+            del self._id_to_metas[self_imid][meta_name]
+            if not self._id_to_metas[self_imid]:
                 del self._id_to_metas[self_imid]
-
-        except KeyError:
-            # Case of delete received for an id which we do not know about.
-            # Could be a case of duplicate delete.
-            # There is nothing for us to do here. Just log and proceed.
-            msg = "Delete received for unknown imid(%s) meta_name(%s)." % \
-                  (self_imid, meta_name)
-            self.config_log(msg, level=SandeshLevel.SYS_DEBUG)
-
+        else:
+            del self._id_to_metas[self_imid]
     # end _delete_id_self_meta
 
     def _delete_id_pair_meta_list(self, id1, meta_list):
@@ -842,7 +831,7 @@ class VncServerCassandraClient(VncCassandraClient):
     # end get_db_info
 
     def __init__(self, db_client_mgr, cass_srv_list, reset_config, db_prefix,
-                      cassandra_credential, walk):
+                      cassandra_credential):
         self._db_client_mgr = db_client_mgr
         keyspaces = self._UUID_KEYSPACE.copy()
         keyspaces[self._USERAGENT_KEYSPACE_NAME] = {
@@ -850,8 +839,7 @@ class VncServerCassandraClient(VncCassandraClient):
         super(VncServerCassandraClient, self).__init__(
             cass_srv_list, db_prefix, keyspaces, None, self.config_log,
             generate_url=db_client_mgr.generate_url,
-            reset_config=reset_config,credential=cassandra_credential,
-            walk=walk)
+            reset_config=reset_config,credential=cassandra_credential)
         self._useragent_kv_cf = self._cf_dict[self._USERAGENT_KV_CF_NAME]
     # end __init__
 
@@ -955,17 +943,6 @@ class VncServerCassandraClient(VncCassandraClient):
         perms2 = json.loads(perms2_json)
         self._update_prop(bch, obj_uuid, 'perms2', {'perms2': perms2})
         bch.send()
-        return perms2
-
-    def enable_domain_sharing(self, obj_uuid, perms2):
-        share_item = {
-            'tenant': 'domain:%s' % obj_uuid,
-            'tenant_access': cfgm_common.DOMAIN_SHARING_PERMS
-        }
-        perms2['share'].append(share_item)
-        bch = self._obj_uuid_cf.batch()
-        self._update_prop(bch, obj_uuid, 'perms2', {'perms2': perms2})
-        bch.send()
 
     def uuid_to_obj_dict(self, id):
         obj_cols = self.get(self._OBJ_UUID_CF_NAME, id)
@@ -1010,13 +987,48 @@ class VncServerCassandraClient(VncCassandraClient):
         self._useragent_kv_cf.remove(key)
     # end useragent_kv_delete
 
+    def walk(self, fn):
+        type_to_object = {}
+        for obj_uuid, obj_col in self._obj_uuid_cf.get_range(
+                columns=['type', 'fq_name']):
+            try:
+                obj_type = json.loads(obj_col['type'])
+                obj_fq_name = json.loads(obj_col['fq_name'])
+                # prep cache to avoid n/w round-trip in db.read for ref
+                self.cache_uuid_to_fq_name_add(obj_uuid, obj_fq_name, obj_type)
+
+                try:
+                    type_to_object[obj_type].append(obj_uuid)
+                except KeyError:
+                    type_to_object[obj_type] = [obj_uuid]
+            except Exception as e:
+                self.config_log('Error in db walk read %s' %(str(e)),
+                                level=SandeshLevel.SYS_ERR)
+                continue
+
+        walk_results = []
+        for obj_type, uuid_list in type_to_object.items():
+            try:
+                self.config_log('Resync: obj_type %s len %s'
+                                %(obj_type, len(uuid_list)),
+                                level=SandeshLevel.SYS_INFO)
+                result = fn(obj_type, uuid_list)
+                if result:
+                    walk_results.append(result)
+            except Exception as e:
+                self.config_log('Error in db walk invoke %s' %(str(e)),
+                                level=SandeshLevel.SYS_ERR)
+                continue
+
+        return walk_results
+    # end walk
 # end class VncCassandraClient
 
 
 class VncServerKombuClient(VncKombuClient):
     def __init__(self, db_client_mgr, rabbit_ip, rabbit_port, ifmap_db,
                  rabbit_user, rabbit_password, rabbit_vhost, rabbit_ha_mode,
-                 rabbit_health_check_interval, **kwargs):
+                 **kwargs):
         self._db_client_mgr = db_client_mgr
         self._sandesh = db_client_mgr._sandesh
         self._ifmap_db = ifmap_db
@@ -1025,8 +1037,7 @@ class VncServerKombuClient(VncKombuClient):
         super(VncServerKombuClient, self).__init__(
             rabbit_ip, rabbit_port, rabbit_user, rabbit_password, rabbit_vhost,
             rabbit_ha_mode, q_name, self._dbe_subscribe_callback,
-            self.config_log, heartbeat_seconds=rabbit_health_check_interval,
-            **kwargs)
+            self.config_log, **kwargs)
 
     # end __init__
 
@@ -1044,7 +1055,7 @@ class VncServerKombuClient(VncKombuClient):
 
     def dbe_uve_trace(self, oper, typ, uuid, body):
         self._db_client_mgr.dbe_uve_trace(oper, typ, uuid, body)
-    # end dbe_uve_trace
+    # end uuid_to_fq_name
 
     def dbe_oper_publish_pending(self):
         return self.num_pending_messages()
@@ -1208,7 +1219,7 @@ class VncZkClient(object):
             client_pfx = ''
             zk_path_pfx = ''
 
-        client_name = '%sapi-%s' %(client_pfx, instance_id)
+        client_name = client_pfx + 'api-' + instance_id
         self._subnet_path = zk_path_pfx + self._SUBNET_PATH
         self._fq_name_to_uuid_path = zk_path_pfx + self._FQ_NAME_TO_UUID_PATH
         self._zk_path_pfx = zk_path_pfx
@@ -1378,41 +1389,32 @@ class VncDbClient(object):
 
         self._db_resync_done = gevent.event.Event()
 
-        if api_svr_mgr.get_worker_id() == 0:
-            msg = "Connecting to ifmap on %s:%s as %s" \
-                  % (ifmap_srv_ip, ifmap_srv_port, uname)
-            self.config_log(msg, level=SandeshLevel.SYS_NOTICE)
+        msg = "Connecting to ifmap on %s:%s as %s" \
+              % (ifmap_srv_ip, ifmap_srv_port, uname)
+        self.config_log(msg, level=SandeshLevel.SYS_NOTICE)
 
-            self._ifmap_db = VncIfmapClient(
-                self, ifmap_srv_ip, ifmap_srv_port, uname, passwd, ssl_options)
-        else:
-            self._ifmap_db = None
+        self._ifmap_db = VncIfmapClient(
+            self, ifmap_srv_ip, ifmap_srv_port, uname, passwd, ssl_options)
 
         msg = "Connecting to zookeeper on %s" % (zk_server_ip)
         self.config_log(msg, level=SandeshLevel.SYS_NOTICE)
-        self._zk_db = VncZkClient(api_svr_mgr.get_worker_id(), zk_server_ip,
+        self._zk_db = VncZkClient(api_svr_mgr._args.worker_id, zk_server_ip,
                                   reset_config, db_prefix, self.config_log)
 
         def cassandra_client_init():
             msg = "Connecting to cassandra on %s" % (cass_srv_list)
             self.config_log(msg, level=SandeshLevel.SYS_NOTICE)
 
-            if api_svr_mgr.get_worker_id() == 0:
-                walk = False # done as part of db_resync()
-            else:
-                walk = True
             self._cassandra_db = VncServerCassandraClient(
-                self, cass_srv_list, reset_config, db_prefix,
-                cassandra_credential, walk=walk)
+                self, cass_srv_list, reset_config, db_prefix, cassandra_credential)
 
         self._zk_db.master_election(cassandra_client_init)
 
         self._msgbus = VncServerKombuClient(self, rabbit_servers,
-            rabbit_port, self._ifmap_db,
-            rabbit_user, rabbit_password,
-            rabbit_vhost, rabbit_ha_mode,
-            api_svr_mgr.get_rabbit_health_check_interval(),
-            **kwargs)
+                                            rabbit_port, self._ifmap_db,
+                                            rabbit_user, rabbit_password,
+                                            rabbit_vhost, rabbit_ha_mode,
+                                            **kwargs)
     # end __init__
 
     def _update_default_quota(self):
@@ -1642,11 +1644,8 @@ class VncDbClient(object):
                                                     obj_uuid, obj_dict)
 
                 # create new perms if upgrading
-                perms2 = obj_dict.get('perms2')
-                if perms2 is None:
-                    perms2 = self._cassandra_db.update_perms2(obj_uuid)
-                if obj_type == 'domain' and len(perms2['share']) == 0:
-                    self._cassandra_db.enable_domain_sharing(obj_uuid, perms2)
+                if 'perms2' not in obj_dict:
+                    self._cassandra_db.update_perms2(obj_uuid)
 
                 if (obj_type == 'bgp_router' and
                         'bgp_router_parameters' in obj_dict and
@@ -1659,7 +1658,7 @@ class VncDbClient(object):
                 # Ifmap alloc
                 parent_res_type = obj_dict.get('parent_type', None)
                 (ok, result) = self._ifmap_db.object_alloc(
-                    obj_class, parent_res_type, obj_dict['fq_name'])
+                    obj_type, parent_res_type, obj_dict['fq_name'])
                 if not ok:
                     msg = "%s(%s), dbe_resync:ifmap_alloc error: %s" % (
                             obj_type, obj_uuid, result[1])
@@ -1737,8 +1736,7 @@ class VncDbClient(object):
             return (False, (409, str(e)))
 
         parent_res_type = obj_dict.get('parent_type')
-        obj_class = self.get_resource_class(obj_type)
-        (ok, result) = VncIfmapClient.object_alloc(obj_class, parent_res_type,
+        (ok, result) = self._ifmap_db.object_alloc(obj_type, parent_res_type,
                                                    obj_dict['fq_name'])
         if not ok:
             self.dbe_release(obj_type, obj_dict['fq_name'])
@@ -1813,6 +1811,11 @@ class VncDbClient(object):
             def wrapper2(self, obj_type, obj_ids, obj_dict):
 
                 obj_uuid = obj_ids['uuid']
+                try:
+                    fq_name = self.uuid_to_fq_name(obj_uuid)
+                except NoIdError as e:
+                    fq_name = obj_dict['fq_name']
+
                 # fetch current share information to identify what might have changed
                 try:
                     cur_perms2 = self.uuid_to_obj_perms2(obj_uuid)
@@ -2142,13 +2145,7 @@ class VncDbClient(object):
     # end get_shared_objects
 
     def reset(self):
-        if self.get_worker_id() == 0:
-            self._ifmap_db.reset(drain_inflight=True)
+        self._ifmap_db.reset(drain_inflight=True)
         self._msgbus.reset()
     # end reset
-
-    def get_worker_id(self):
-        return self._api_svr_mgr.get_worker_id()
-    # end get_worker_id
-
 # end class VncDbClient

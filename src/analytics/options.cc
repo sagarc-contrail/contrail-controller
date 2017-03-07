@@ -14,7 +14,6 @@
 #include "base/util.h"
 #include "net/address_util.h"
 #include "viz_constants.h"
-#include <database/gendb_constants.h>
 
 using namespace std;
 using namespace boost::asio::ip;
@@ -81,20 +80,12 @@ void Options::Initialize(EventManager &evm,
     default_kafka_broker_list.push_back("");
 
     // Command line and config file options.
-    opt::options_description cassandra_config("Cassandra Configuration options");
+    opt::options_description cassandra_config("cassandra Configuration options");
     cassandra_config.add_options()
-        ("CASSANDRA.cassandra_user", opt::value<string>()->default_value(""),
+        ("CASSANDRA.cassandra_user",opt::value<string>()->default_value(""),
               "Cassandra user name")
-        ("CASSANDRA.cassandra_password", opt::value<string>()->default_value(""),
-              "Cassandra password")
-        ("CASSANDRA.compaction_strategy",
-            opt::value<string>()->default_value(
-                GenDb::g_gendb_constants.SIZE_TIERED_COMPACTION_STRATEGY),
-            "Cassandra compaction strategy")
-        ("CASSANDRA.flow_tables.compaction_strategy",
-            opt::value<string>()->default_value(
-                GenDb::g_gendb_constants.DATE_TIERED_COMPACTION_STRATEGY),
-            "Cassandra compaction strategy for flow tables");
+        ("CASSANDRA.cassandra_password",opt::value<string>()->default_value(""),
+              "Cassandra password");
 
     // Command line and config file options.
     opt::options_description config("Configuration options");
@@ -185,19 +176,6 @@ void Options::Initialize(EventManager &evm,
         ("DEFAULT.disable_flow_collection",
             opt::bool_switch(&disable_flow_collection_),
             "Disable flow message collection")
-        ("DATABASE.disable_all_writes",
-            opt::bool_switch(&disable_all_db_writes_),
-            "Disable all writes to the database")
-        ("DATABASE.disable_statistics_writes",
-            opt::bool_switch(&disable_db_stats_writes_),
-            "Disable statistics writes to the database")
-        ("DATABASE.disable_message_writes",
-            opt::bool_switch(&disable_db_messages_writes_),
-            "Disable message writes to the database")
-        ("DATABASE.enable_message_keyword_writes",
-            opt::bool_switch(&enable_db_messages_keyword_writes_)->
-                default_value(false),
-            "Enable message keyword writes to the database")
 
         ("DISCOVERY.port", opt::value<uint16_t>()->default_value(
                                                        default_discovery_port),
@@ -297,25 +275,6 @@ void Options::GetOptValueImpl(
                 std::back_inserter(var));
         }
     }
-}
-
-static bool ValidateCompactionStrategyOption(
-    const std::string &compaction_strategy,
-    const std::string &option) {
-    if (!((compaction_strategy ==
-        GenDb::g_gendb_constants.DATE_TIERED_COMPACTION_STRATEGY) ||
-        (compaction_strategy ==
-        GenDb::g_gendb_constants.LEVELED_COMPACTION_STRATEGY) ||
-        (compaction_strategy ==
-        GenDb::g_gendb_constants.SIZE_TIERED_COMPACTION_STRATEGY))) {
-        cout << "Invalid " << option <<  ", please select one of [" <<
-            GenDb::g_gendb_constants.DATE_TIERED_COMPACTION_STRATEGY << ", " <<
-            GenDb::g_gendb_constants.LEVELED_COMPACTION_STRATEGY << ", " <<
-            GenDb::g_gendb_constants.SIZE_TIERED_COMPACTION_STRATEGY << "]" <<
-            endl;
-        return false;
-    }
-    return true;
 }
 
 // Process command line options. They can come from a conf file as well. Options
@@ -418,19 +377,6 @@ void Options::Process(int argc, char *argv[],
     GetOptValue<string>(var_map, redis_password_, "REDIS.password");
     GetOptValue<string>(var_map, cassandra_user_, "CASSANDRA.cassandra_user");
     GetOptValue<string>(var_map, cassandra_password_, "CASSANDRA.cassandra_password");
-    GetOptValue<string>(var_map, cassandra_compaction_strategy_,
-        "CASSANDRA.compaction_strategy");
-    if (!ValidateCompactionStrategyOption(cassandra_compaction_strategy_,
-        "CASSANDRA.compaction_strategy")) {
-        exit(-1);
-    }
-    GetOptValue<string>(var_map, cassandra_flow_tables_compaction_strategy_,
-        "CASSANDRA.flow_tables.compaction_strategy");
-    if (!ValidateCompactionStrategyOption(
-        cassandra_flow_tables_compaction_strategy_,
-        "CASSANDRA.flow_tables.compaction_strategy")) {
-        exit(-1);
-    }
     GetOptValue<uint16_t>(var_map, ks_port_, "KEYSTONE.auth_port");
     GetOptValue<string>(var_map, ks_server_, "KEYSTONE.auth_host");
     GetOptValue<string>(var_map, ks_protocol_, "KEYSTONE.auth_protocol");

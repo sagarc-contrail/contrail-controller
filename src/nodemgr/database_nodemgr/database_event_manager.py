@@ -32,7 +32,7 @@ from pysandesh.gen_py.sandesh_trace.ttypes import SandeshTraceRequest
 from sandesh_common.vns.ttypes import Module, NodeType
 from sandesh_common.vns.constants import ModuleNames, NodeTypeNames,\
     Module2NodeType, INSTANCE_ID_DEFAULT, SERVICE_CONTRAIL_DATABASE, \
-    RepairNeededKeyspaces, ThreadPoolNames, UVENodeTypeNames
+    RepairNeededKeyspaces, ThreadPoolNames
 from subprocess import Popen, PIPE
 from StringIO import StringIO
 
@@ -52,7 +52,6 @@ class DatabaseEventManager(EventManager):
                  cassandra_repair_interval,
                  cassandra_repair_logdir):
         self.node_type = "contrail-database"
-        self.uve_node_type = UVENodeTypeNames[NodeType.DATABASE]
         self.table = "ObjectDatabaseInfo"
         self.module = Module.DATABASE_NODE_MGR
         self.module_id = ModuleNames[self.module]
@@ -62,10 +61,7 @@ class DatabaseEventManager(EventManager):
         self.cassandra_repair_interval = cassandra_repair_interval
         self.cassandra_repair_logdir = cassandra_repair_logdir
         self.cassandra_mgr = CassandraManager(cassandra_repair_logdir)
-        if os.path.exists('/tmp/supervisord_database.sock'):
-            self.supervisor_serverurl = "unix:///tmp/supervisord_database.sock"
-        else:
-            self.supervisor_serverurl = "unix:///var/run/supervisord_database.sock"
+        self.supervisor_serverurl = "unix:///var/run/supervisord_database.sock"
         self.add_current_process()
         node_type = Module2NodeType[self.module]
         node_type_name = NodeTypeNames[node_type]

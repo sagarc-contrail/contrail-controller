@@ -34,11 +34,7 @@ SandeshTraceBufferPtr FlowExportStatsTraceBuf(SandeshTraceBufferCreate(
     "FlowExportStats", 3000));
 const uint8_t FlowStatsManager::kCatchAllProto;
 
-void FlowStatsManager::UpdateThreshold(uint64_t new_value, bool check_oflow) {
-    if (check_oflow && new_value < threshold_) {
-        /* Retain the same value for threshold if it results in overflow */
-        return;
-    }
+void FlowStatsManager::UpdateThreshold(uint32_t new_value) {
     if (new_value < kMinFlowSamplingThreshold) {
         threshold_ = kMinFlowSamplingThreshold;
     } else {
@@ -82,8 +78,7 @@ FlowStatsManager::FlowStatsManager(Agent *agent) : agent_(agent),
     flow_export_count_(), prev_flow_export_rate_compute_time_(0),
     flow_export_rate_(0), threshold_(kDefaultFlowSamplingThreshold),
     flow_export_disable_drops_(), flow_export_sampling_drops_(),
-    flow_export_drops_(), deleted_flow_export_drops_(),
-    prev_cfg_flow_export_rate_(0),
+    flow_export_drops_(), prev_cfg_flow_export_rate_(0),
     timer_(TimerManager::CreateTimer(*(agent_->event_manager())->io_service(),
            "FlowThresholdTimer",
            TaskScheduler::GetInstance()->GetTaskId("Agent::FlowStatsManager"), 0)),
@@ -92,13 +87,8 @@ FlowStatsManager::FlowStatsManager(Agent *agent) : agent_(agent),
     flow_export_disable_drops_ = 0;
     flow_export_sampling_drops_ = 0;
     flow_export_drops_ = 0;
-    deleted_flow_export_drops_ = 0;
     flows_sampled_atleast_once_ = false;
     request_queue_.set_measure_busy_time(agent->MeasureQueueDelay());
-    for (uint16_t i = 0; i < sizeof(protocol_list_)/sizeof(protocol_list_[0]);
-         i++) {
-        protocol_list_[i] = NULL;
-    }
 }
 
 FlowStatsManager::~FlowStatsManager() {
@@ -142,11 +132,14 @@ void FlowStatsManager::AddReqHandler(boost::shared_ptr<FlowStatsCollectorReq>
     }
 
     uint32_t instance_id = instance_table_.Insert(NULL);
+	AgentUveBase *pAgentUVEBase = agent()->uve();
+	FlowAgingTableKey *pFlowAgingTableKey = &(req->key);
+	FlowStatsManager *pThisFlowStatsManager = this;
     FlowAgingTablePtr aging_table(
         AgentObjectFactory::Create<FlowStatsCollector>(
         *(agent()->event_manager()->io_service()),
         req->flow_stats_interval, req->flow_cache_timeout,
-        agent()->uve(), instance_id, &(req->key), this));
+        pAgentUVEBase, instance_id, pFlowAgingTableKey, pThisFlowStatsManager));
 
     flow_aging_table_map_.insert(FlowAgingTableEntry(req->key, aging_table));
     if (req->key.proto == kCatchAllProto && req->key.port == 0) {
@@ -305,8 +298,7 @@ void FlowStatsManager::DeleteEvent(const FlowEntryPtr &flow,
 
 void FlowStatsManager::UpdateStatsEvent(const FlowEntryPtr &flow,
                                         uint32_t bytes, uint32_t packets,
-                                        uint32_t oflow_bytes,
-                                        const boost::uuids::uuid &u) {
+                                        uint32_t oflow_bytes) {
     if (flow == NULL) {
         return;
     }
@@ -318,7 +310,7 @@ void FlowStatsManager::UpdateStatsEvent(const FlowEntryPtr &flow,
         return;
     }
 
-    fsc->UpdateStatsEvent(flow, bytes, packets, oflow_bytes, u);
+    fsc->UpdateStatsEvent(flow, bytes, packets, oflow_bytes);
 }
 
 void FlowStatsManager::FreeIndex(uint32_t idx) {

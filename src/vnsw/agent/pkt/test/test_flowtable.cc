@@ -87,8 +87,7 @@ FlowEntry *FlowInit(TestFlowKey *t, FlowTable *flow_table) {
     ctrl.intf_ = VmPortGet(t->ifindex_);
     ctrl.vm_ = VmGet(t->vm_);
 
-    flow->InitFwdFlow(&info, pkt, &ctrl, &ctrl, NULL, Agent::GetInstance(),
-                      info.l3_flow);
+    flow->InitFwdFlow(&info, pkt, &ctrl, &ctrl, NULL, Agent::GetInstance());
     return flow;
 }
 
@@ -290,8 +289,7 @@ public:
         ctrl.intf_ = VmPortGet(t->ifindex_);
         ctrl.vm_ = VmGet(t->vm_);
 
-        flow->InitFwdFlow(&info, pkt, &ctrl, &ctrl, NULL, Agent::GetInstance(),
-                          info.l3_flow);
+        flow->InitFwdFlow(&info, pkt, &ctrl, &ctrl, NULL, Agent::GetInstance());
         return flow;
     }
 

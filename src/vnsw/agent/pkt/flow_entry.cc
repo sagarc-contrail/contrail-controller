@@ -1,10 +1,15 @@
 /*
  * Copyright (c) 2015 Juniper Networks, Inc. All rights reserved.
  */
+#include <boost/asio.hpp>
+#include <windows.h>
 
 #include <vector>
 #include <bitset>
+
 #include <arpa/inet.h>
+
+
 #include <netinet/in.h>
 #include <base/os.h>
 
@@ -83,15 +88,12 @@ const std::map<uint16_t, const char*>
         ((uint16_t)SHORT_FLOW_ON_TSN,        "Short flow TSN flow")
         ((uint16_t)SHORT_NO_MIRROR_ENTRY,     "Short flow No mirror entry ")
         ((uint16_t)SHORT_SAME_FLOW_RFLOW_KEY,"Short flow same flow and rflow")
-        ((uint16_t)SHORT_INACTIVE_NH,        "Shot flow - Inactive Nexthop")
         ((uint16_t)DROP_POLICY,              "Flow drop Policy")
         ((uint16_t)DROP_OUT_POLICY,          "Flow drop Out Policy")
         ((uint16_t)DROP_SG,                  "Flow drop SG")
         ((uint16_t)DROP_OUT_SG,              "Flow drop OUT SG")
         ((uint16_t)DROP_REVERSE_SG,          "Flow drop REVERSE SG")
-        ((uint16_t)DROP_REVERSE_OUT_SG,      "Flow drop REVERSE OUT SG")
-        ((uint16_t)SHORT_NO_SRC_ROUTE_L2RPF,
-         "Short flow No Source route for RPF NH");
+        ((uint16_t)DROP_REVERSE_OUT_SG,      "Flow drop REVERSE OUT SG");
 
 tbb::atomic<int> FlowEntry::alloc_count_;
 SecurityGroupList FlowEntry::default_sg_list_;
@@ -173,7 +175,12 @@ void VmFlowRef::FreeFd() {
     FlowProto *proto = flow_->flow_table()->agent()->pkt()->get_flow_proto();
     proto->update_linklocal_flow_count(-1);
     flow_->flow_table()->DelLinkLocalFlowInfo(fd_);
+#ifndef _WINDOWS
     close(fd_);
+#else
+	closesocket(fd_);
+#endif
+
     fd_ = kInvalidFd;
     port_ = 0;
 }
@@ -222,15 +229,19 @@ bool VmFlowRef::AllocateFd(Agent *agent, uint8_t l3_proto) {
 
     // allow the socket to be reused upon close
     int optval = 1;
+#ifndef _WINDOWS
     setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
+#else
+	setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, (char*)&optval, sizeof(optval));
+#endif
 
     struct sockaddr_in address;
     memset(&address, 0, sizeof(address));
     address.sin_family = AF_INET;
-    if (bind(fd_, (struct sockaddr*) &address, sizeof(address)) < 0) {
+   if (::bind(fd_, (struct sockaddr*) &address, sizeof(address)) < 0) {
         FreeFd();
         return false;
-    }
+   }
 
     struct sockaddr_in bound_to;
     socklen_t len = sizeof(bound_to);
@@ -349,7 +360,7 @@ void MatchPolicy::Reset() {
 /////////////////////////////////////////////////////////////////////////////
 // FlowEventLog constructor/destructor
 /////////////////////////////////////////////////////////////////////////////
-FlowEventLog::FlowEventLog() : time_(0), event_(EVENT_MAX),
+FlowEventLog::FlowEventLog() : time_(0), event_(EVENT_MAXIMUM),
     flow_handle_(FlowEntry::kInvalidFlowHandle), flow_gen_id_(0),
     ksync_entry_(NULL), hash_id_(FlowEntry::kInvalidFlowHandle), gen_id_(0),
     vrouter_flow_handle_(FlowEntry::kInvalidFlowHandle), vrouter_gen_id_(0) {
@@ -416,12 +427,6 @@ void FlowEntry::Reset(const FlowKey &k) {
     key_ = k;
 }
 
-// Change key for a flow-table. Caller must ensure that flow-entry is not
-// in tree
-void FlowEntry::SetKey(const FlowKey &k) {
-    key_ = k;
-}
-
 void FlowEntry::Init() {
     alloc_count_ = 0;
 }
@@ -445,8 +450,8 @@ FlowEntry *FlowEntry::Allocate(const FlowKey &key, FlowTable *flow_table) {
 // When flow is being updated, rhs will be new flow allocated in PktFlowInfo
 void FlowEntry::Copy(FlowEntry *rhs, bool update) {
     if (update) {
-        rhs->data_.in_vm_entry.Reset(false);
-        rhs->data_.out_vm_entry.Reset(false);
+        rhs->data_.in_vm_entry.FreeFd();
+        rhs->data_.out_vm_entry.FreeFd();
     } else {
         // The operator= below will call VmFlowRef operator=. In case of flow
         // eviction, we want to move ownership from rhs to lhs. However rhs is
@@ -470,8 +475,9 @@ void FlowEntry::Copy(FlowEntry *rhs, bool update) {
         gen_id_ = rhs->gen_id_;
         flow_handle_ = rhs->flow_handle_;
         /* Flow Entry is being re-used. Generate a new UUID for it. */
-        uuid_ = flow_table_->rand_gen();
-        egress_uuid_ = flow_table_->rand_gen();
+        // results is delete miss for previous uuid to stats collector
+        // with eviction disabled following is not required
+        // uuid_ = flow_table_->rand_gen();
     }
 }
 
@@ -506,7 +512,7 @@ void intrusive_ptr_release(FlowEntry *fe) {
 
 bool FlowEntry::InitFlowCmn(const PktFlowInfo *info, const PktControlInfo *ctrl,
                             const PktControlInfo *rev_ctrl,
-                            FlowEntry *rflow, bool l3_flow) {
+                            FlowEntry *rflow) {
     reverse_flow_entry_ = rflow;
     reset_flags(FlowEntry::ReverseFlow);
     peer_vrouter_ = info->peer_vrouter;
@@ -558,7 +564,7 @@ bool FlowEntry::InitFlowCmn(const PktFlowInfo *info, const PktControlInfo *ctrl,
     data_.vn_entry = ctrl->vn_ ? ctrl->vn_ : rev_ctrl->vn_;
     data_.in_vm_entry.SetVm(ctrl->vm_);
     data_.out_vm_entry.SetVm(rev_ctrl->vm_);
-    l3_flow_ = l3_flow;
+    l3_flow_ = info->l3_flow;
     data_.ecmp_rpf_nh_ = 0;
     data_.acl_assigned_vrf_index_ = VrfEntry::kInvalidIndex;
     return true;
@@ -567,10 +573,10 @@ bool FlowEntry::InitFlowCmn(const PktFlowInfo *info, const PktControlInfo *ctrl,
 void FlowEntry::InitFwdFlow(const PktFlowInfo *info, const PktInfo *pkt,
                             const PktControlInfo *ctrl,
                             const PktControlInfo *rev_ctrl,
-                            FlowEntry *rflow, Agent *agent, bool l3_flow) {
+                            FlowEntry *rflow, Agent *agent) {
     gen_id_ = pkt->GetAgentHdr().cmd_param_5;
     flow_handle_ = pkt->GetAgentHdr().cmd_param;
-    if (InitFlowCmn(info, ctrl, rev_ctrl, rflow, l3_flow) == false) {
+    if (InitFlowCmn(info, ctrl, rev_ctrl, rflow) == false) {
         return;
     }
     if (info->linklocal_bind_local_port) {
@@ -640,9 +646,9 @@ void FlowEntry::InitFwdFlow(const PktFlowInfo *info, const PktInfo *pkt,
 void FlowEntry::InitRevFlow(const PktFlowInfo *info, const PktInfo *pkt,
                             const PktControlInfo *ctrl,
                             const PktControlInfo *rev_ctrl,
-                            FlowEntry *rflow, Agent *agent, bool l3_flow) {
+                            FlowEntry *rflow, Agent *agent) {
     uint32_t intf_in;
-    if (InitFlowCmn(info, ctrl, rev_ctrl, rflow, l3_flow) == false) {
+    if (InitFlowCmn(info, ctrl, rev_ctrl, rflow) == false) {
         return;
     }
     set_flags(FlowEntry::ReverseFlow);
@@ -756,15 +762,6 @@ AgentRoute *FlowEntry::GetUcRoute(const VrfEntry *entry,
     return rt;
 }
 
-AgentRoute *FlowEntry::GetEvpnRoute(const VrfEntry *vrf,
-                                    const MacAddress &mac,
-                                    const IpAddress &ip,
-                                    uint32_t ethernet_tag) {
-    EvpnAgentRouteTable *table = static_cast<EvpnAgentRouteTable *>(
-            vrf->GetEvpnRouteTable());
-    return table->FindRouteNoLock(mac, ip, ethernet_tag);
-}
-
 uint32_t FlowEntry::reverse_flow_fip() const {
     FlowEntry *rflow = reverse_flow_entry_.get();
     if (rflow) {
@@ -835,7 +832,7 @@ void FlowEntry::RevFlowDepInfo(RevFlowDepParams *params) {
         params->sg_uuid_ = rev_flow->sg_rule_uuid();
         params->rev_egress_uuid_ = rev_flow->egress_uuid();
         if (rev_flow->intf_entry()) {
-            params->vmi_uuid_ = UuidToString(rev_flow->intf_entry()->GetUuid());
+            params->vmi_uuid_ = UUIDToString(rev_flow->intf_entry()->GetUuid());
         }
 
         if (key().family != Address::INET) {
@@ -983,11 +980,6 @@ bool FlowEntry::SetRpfNH(FlowTable *ft, const AgentRoute *rt) {
             //happened from non-ecmp to ECMP.
         } else if (is_flags_set(FlowEntry::IngressDir) ||
                 (ip_rt && ip_rt->IsHostRoute())) {
-            if (data_.vn_entry && data_.vn_entry->enable_rpf() && !ip_rt) {
-                set_flags(FlowEntry::ShortFlow);
-                short_flow_reason_ = SHORT_NO_SRC_ROUTE_L2RPF;
-                return ret;
-            }
             rt = ip_rt;
             if (rt) {
                 data_.l2_rpf_plen = rt->plen();
@@ -1172,11 +1164,6 @@ void FlowEntry::GetVrfAssignAcl() {
         return;
     }
 
-    // Skip VrfTranslate rules for l2-flows
-    if (l3_flow() == false) {
-        return;
-    }
-
     if  (data_.intf_entry->type() != Interface::VM_INTERFACE) {
         return;
     }
@@ -1308,13 +1295,14 @@ void FlowEntry::GetLocalFlowSgList(const VmInterface *vm_port,
             CopySgEntries(reverse_vm_port, false, data_.match_p.m_out_sg_acl_l);
     }
 
-    //Update reverse SG flow entry so that it can be used in below 2 scenario
-    //1> Forwarding flow is deny, but reverse flow says Allow the traffic
-    //   in that scenario we mark the reverse flow for Trap
-    //2> TCP ACK workaround:
-    //   Ideally TCP State machine should be run to age TCP flows
-    //   Temporary workaound in place of state machine. For TCP ACK packets allow
-    //   the flow if either forward or reverse flow is allowed
+    if (!is_flags_set(FlowEntry::TcpAckFlow)) {
+        return;
+    }
+
+    // TCP ACK workaround:
+    // Ideally TCP State machine should be run to age TCP flows
+    // Temporary workaound in place of state machine. For TCP ACK packets allow
+    // the flow if either forward or reverse flow is allowed
 
     // Copy the SG rules to be applied for reverse flow
     data_.match_p.reverse_out_sg_rule_present =
@@ -1335,13 +1323,14 @@ void FlowEntry::GetNonLocalFlowSgList(const VmInterface *vm_port) {
                                                   data_.match_p.m_sg_acl_l);
     data_.match_p.out_sg_rule_present = false;
 
-    //Update reverse SG flow entry so that it can be used in below 2 scenario
-    //1> Forwarding flow is deny, but reverse flow says Allow the traffic
-    //   in that scenario we mark the reverse flow for Trap
-    //2> TCP ACK workaround:
-    //   Ideally TCP State machine should be run to age TCP flows
-    //   Temporary workaound in place of state machine. For TCP ACK packets allow
-    //   the flow if either forward or reverse flow is allowed
+    if (!is_flags_set(FlowEntry::TcpAckFlow)) {
+        return;
+    }
+
+    // TCP ACK workaround:
+    // Ideally TCP State machine should be run to age TCP flows
+    // Temporary workaound in place of state machine. For TCP ACK packets allow
+    // the flow if either forward or reverse flow is allowed
 
     // Copy the SG rules to be applied for reverse flow
     data_.match_p.reverse_out_sg_rule_present =
@@ -1685,19 +1674,10 @@ bool FlowEntry::DoPolicy() {
                          !data_.match_p.out_sg_rule_present, &out_sg_acl_info);
         }
 
-        bool check_rev_sg = false;
-        if (ShouldDrop(data_.match_p.sg_action) ||
-            ShouldDrop(data_.match_p.out_sg_action)) {
-            //If forward direction SG action is DENY
-            //verify if packet is allowed in reverse side,
-            //if yes we set a flag to TRAP the reverse flow
-            check_rev_sg = true;
-        }
-
         // For TCP-ACK packet, we allow packet if either forward or reverse
         // flow says allow. So, continue matching reverse flow even if forward
         // flow says drop
-        if ((check_rev_sg || is_flags_set(FlowEntry::TcpAckFlow)) && rflow) {
+        if (is_flags_set(FlowEntry::TcpAckFlow) && rflow) {
             rflow->SetPacketHeader(&hdr);
             data_.match_p.reverse_sg_action =
                 MatchAcl(hdr, data_.match_p.m_reverse_sg_acl_l, true,
@@ -1850,6 +1830,13 @@ void FlowEntry::SetComponentIndex(const NextHopKey *nh_key,
     }
 
     const CompositeNH *comp_nh = static_cast<const CompositeNH *>(nh);
+    //If remote destination is TUNNEL nexthop frame the key by
+    //getting the reverse path mpls label that would be used to
+    //send the packet back
+    if (nh_key->GetType() == NextHop::TUNNEL) {
+        const TunnelNHKey *tun_nh = static_cast<const TunnelNHKey *>(nh_key);
+        label = comp_nh->GetRemoteLabel(tun_nh->dip());
+    }
 
     const NextHop *component_nh_ptr = static_cast<NextHop *>(
         flow_table()->agent()->nexthop_table()->FindActiveEntry(nh_key));
@@ -2130,6 +2117,10 @@ bool FlowEntry::ActionRecompute() {
         }
     }
 
+    if (action & (1 << TrafficAction::TRAP)) {
+        action = (1 << TrafficAction::TRAP);
+    }
+
     if (action != data_.match_p.action_info.action) {
         data_.match_p.action_info.action = action;
         ret = true;
@@ -2194,13 +2185,10 @@ void FlowEntry::UpdateReflexiveAction() {
     // TRAP. If packet hits reverse flow, we will re-establish
     // the flows
     if (ShouldDrop(data_.match_p.sg_action_summary)) {
-        if (fwd_flow &&
-            ShouldDrop(fwd_flow->data().match_p.reverse_sg_action) == false &&
-            ShouldDrop(fwd_flow->data().match_p.reverse_out_sg_action) == false) {
-            data_.match_p.sg_action &= ~(TrafficAction::DROP_FLAGS);
-            set_flags(FlowEntry::Trap);
-        }
-    }
+        data_.match_p.sg_action &= ~(TrafficAction::DROP_FLAGS);
+        data_.match_p.sg_action |= (1 << TrafficAction::TRAP);
+     }
+    data_.qos_config_idx = fwd_flow->data_.qos_config_idx;
 }
 
 /////////////////////////////////////////////////////////////////////////////
@@ -2346,7 +2334,7 @@ static void SetAclListAclAction(const std::list<MatchAclParams> &acl_l,
     std::list<MatchAclParams>::const_iterator it;
     for(it = acl_l.begin(); it != acl_l.end(); ++it) {
         AclAction acl_action;
-        acl_action.set_acl_id(UuidToString((*it).acl->GetUuid()));
+        acl_action.set_acl_id(UUIDToString((*it).acl->GetUuid()));
         acl_action.set_acl_type(acl_type);
         std::vector<ActionStr> action_str_l;
         SetActionStr((*it).action_info, action_str_l);
@@ -2576,7 +2564,7 @@ void FlowEntry::SetAclFlowSandeshData(const AclDBEntry *acl,
         v.push_back(*it);
     }
     fe_sandesh_data.set_dest_sg_id_l(v);
-    fe_sandesh_data.set_flow_uuid(UuidToString(uuid()));
+    fe_sandesh_data.set_flow_uuid(UUIDToString(uuid()));
     if (fsc_) {
         const FlowExportInfo *info = fsc_->FindFlowExportInfo(this);
         if (info) {

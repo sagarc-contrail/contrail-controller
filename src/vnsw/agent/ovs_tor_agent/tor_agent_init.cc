@@ -73,22 +73,22 @@ void TorAgentInit::CreatePeers() {
 }
 
 void TorAgentInit::CreateModules() {
-    uve_.reset(new AgentUve(agent(), AgentUveBase::kBandwidthInterval,
-                            AgentUveBase::kDefaultInterval,
-                            AgentUveBase::kIncrementalInterval));
-    agent()->set_uve(uve_.get());
     ovsdb_client_.reset(OvsdbClient::Allocate(agent(),
                 static_cast<TorAgentParam *>(agent_param()),
                 ovs_peer_manager()));
     agent()->set_ovsdb_client(ovsdb_client_.get());
+    uve_.reset(new AgentUve(agent(), AgentUveBase::kBandwidthInterval,
+                            AgentUveBase::kDefaultInterval,
+                            AgentUveBase::kIncrementalInterval));
+    agent()->set_uve(uve_.get());
 }
 
 void TorAgentInit::CreateDBTables() {
 }
 
 void TorAgentInit::RegisterDBClients() {
-    uve_->RegisterDBClients();
     ovsdb_client_->RegisterClients();
+    uve_->RegisterDBClients();
 }
 
 void TorAgentInit::InitModules() {

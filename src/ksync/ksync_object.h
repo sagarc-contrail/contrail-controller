@@ -253,7 +253,6 @@ public:
     // Used for lookup of KSyncEntry from DBEntry
     virtual KSyncEntry *DBToKSyncEntry(const DBEntry *entry) = 0;
     void set_test_id(DBTableBase::ListenerId id);
-    DBTableBase::ListenerId id() const {return id_;}
 
 private:
     //Callback to do cleanup when DEL ACK is received.
@@ -271,7 +270,7 @@ struct KSyncObjectEvent {
     enum Event {
         UNKNOWN,
         UNREGISTER,
-        DELETE,
+        DEL,
     };
     KSyncObjectEvent(KSyncObject *obj, Event event) :
         obj_(obj), event_(event) {
